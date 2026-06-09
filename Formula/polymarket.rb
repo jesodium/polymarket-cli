@@ -1,30 +1,30 @@
 class Polymarket < Formula
   desc "CLI for Polymarket — browse markets, trade, and manage positions"
   homepage "https://github.com/jesodium/polymarket-cli"
-  version "0.1.4"
+  version "0.1.5"
   license "MIT"
 
   on_macos do
     on_intel do
       url "https://github.com/jesodium/polymarket-cli/releases/download/v#{version}/polymarket-v#{version}-x86_64-apple-darwin.tar.gz"
-      sha256 "ec1dee1e1b7a66e8d2fc60ceb5e212b9f78e403b8079759a3b29b885cc4bb7ef"
+      sha256 "5efde783327046ee0fba33baf4f0b9e9e7cbac75ba7482bac57f676604581f31"
     end
 
     on_arm do
       url "https://github.com/jesodium/polymarket-cli/releases/download/v#{version}/polymarket-v#{version}-aarch64-apple-darwin.tar.gz"
-      sha256 "c054c298417340d23995aa1181a2e47eea5bf7cb335c5417eb78e714fc433ac9"
+      sha256 "1e0c57c0a68baa6f7e3469d684b770263048923bfc673ec7e7061db5156427bf"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/jesodium/polymarket-cli/releases/download/v#{version}/polymarket-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "b9f70ad1e3553de8a6546025ea1c7d14d69d51949c7609cac4cf8d9c686baa72"
+      sha256 "dd9c8c9f396588427efd7f538474b2a11434c21fdf6ca90aa75a0edb2bd3d8a6"
     end
 
     on_arm do
       url "https://github.com/jesodium/polymarket-cli/releases/download/v#{version}/polymarket-v#{version}-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "4c94f152404483cdfe6fa3fed60b633a36f2fc813f3ee78091e6046423144292"
+      sha256 "1a33c92c6ffb21172254496d400e4a8bf6996cd00ee90e05199be47600057cda"
     end
   end
 
