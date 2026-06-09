@@ -41,7 +41,7 @@ impl KeySource {
     }
 }
 
-fn config_dir() -> Result<PathBuf> {
+pub(crate) fn config_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Could not determine home directory")?;
     Ok(home.join(".config").join("polymarket"))
 }
@@ -54,10 +54,12 @@ pub fn config_exists() -> bool {
     config_path().is_ok_and(|p| p.exists())
 }
 
+/// Delete the wallet config file only. Other files in the config directory
+/// (e.g. the paper trading account) are left untouched.
 pub fn delete_config() -> Result<()> {
-    let dir = config_dir()?;
-    if dir.exists() {
-        fs::remove_dir_all(&dir).context("Failed to remove config directory")?;
+    let path = config_path()?;
+    if path.exists() {
+        fs::remove_file(&path).context("Failed to remove config file")?;
     }
     Ok(())
 }

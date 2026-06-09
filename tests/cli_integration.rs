@@ -486,3 +486,166 @@ fn wallet_address_succeeds_or_fails_gracefully() {
     // Either succeeds or fails with an error message — not a panic
     assert!(output.status.success() || !output.stderr.is_empty());
 }
+
+// ── Paper trading ────────────────────────────────────────────────────────
+
+/// A polymarket command wired to an isolated temp paper account file.
+fn polymarket_paper(file: &std::path::Path) -> Command {
+    let mut cmd = polymarket();
+    cmd.env("POLYMARKET_PAPER_FILE", file);
+    cmd
+}
+
+fn temp_paper_file(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "polymarket-test-{name}-{}.json",
+        std::process::id()
+    ))
+}
+
+#[test]
+fn help_lists_paper_command() {
+    polymarket()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("paper"));
+}
+
+#[test]
+fn paper_help_lists_subcommands() {
+    polymarket()
+        .args(["paper", "--help"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("enable")
+                .and(predicate::str::contains("disable"))
+                .and(predicate::str::contains("reset"))
+                .and(predicate::str::contains("buy"))
+                .and(predicate::str::contains("sell"))
+                .and(predicate::str::contains("portfolio"))
+                .and(predicate::str::contains("history"))
+                .and(predicate::str::contains("stats")),
+        );
+}
+
+#[test]
+fn paper_enable_creates_account_with_default_balance() {
+    let file = temp_paper_file("enable");
+    polymarket_paper(&file)
+        .args(["-o", "json", "paper", "enable"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("\"enabled\": true").and(predicate::str::contains("10000")),
+        );
+    let _ = std::fs::remove_file(&file);
+}
+
+#[test]
+fn paper_status_reflects_disable() {
+    let file = temp_paper_file("disable");
+    polymarket_paper(&file)
+        .args(["paper", "enable"])
+        .assert()
+        .success();
+    polymarket_paper(&file)
+        .args(["paper", "disable"])
+        .assert()
+        .success();
+    polymarket_paper(&file)
+        .args(["-o", "json", "paper", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"enabled\": false"));
+    let _ = std::fs::remove_file(&file);
+}
+
+#[test]
+fn paper_reset_sets_custom_balance() {
+    let file = temp_paper_file("reset");
+    polymarket_paper(&file)
+        .args(["-o", "json", "paper", "reset", "--balance", "500"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"balance\": \"500\""));
+    let _ = std::fs::remove_file(&file);
+}
+
+#[test]
+fn paper_reset_rejects_nonpositive_balance() {
+    let file = temp_paper_file("reset-bad");
+    polymarket_paper(&file)
+        .args(["paper", "reset", "--balance", "0"])
+        .assert()
+        .failure();
+    let _ = std::fs::remove_file(&file);
+}
+
+#[test]
+fn paper_buy_requires_amount_or_price_and_size() {
+    let file = temp_paper_file("buy-args");
+    polymarket_paper(&file)
+        .args(["paper", "buy", "123"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--amount").and(predicate::str::contains("--price")));
+    let _ = std::fs::remove_file(&file);
+}
+
+#[test]
+fn paper_buy_rejects_amount_combined_with_price() {
+    polymarket()
+        .args([
+            "paper", "buy", "123", "--amount", "100", "--price", "0.5", "--size", "10",
+        ])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn paper_commands_fail_without_account() {
+    let file = temp_paper_file("no-account");
+    for sub in ["portfolio", "history", "orders", "stats", "disable"] {
+        polymarket_paper(&file)
+            .args(["paper", sub])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("paper enable"));
+    }
+}
+
+#[test]
+fn clob_paper_flag_needs_no_wallet() {
+    // With --paper and no paper account, the error must be about the paper
+    // account — never about a missing wallet, proving the live path is
+    // bypassed entirely.
+    let file = temp_paper_file("clob-flag");
+    polymarket_paper(&file)
+        .args([
+            "clob",
+            "market-order",
+            "--token",
+            "123",
+            "--side",
+            "buy",
+            "--amount",
+            "10",
+            "--paper",
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("paper enable").and(predicate::str::contains("wallet").not()),
+        );
+}
+
+#[test]
+fn clob_create_order_help_shows_paper_flag() {
+    polymarket()
+        .args(["clob", "create-order", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--paper"));
+}

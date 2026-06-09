@@ -215,6 +215,9 @@ pub enum ClobCommand {
         /// Post-only order
         #[arg(long)]
         post_only: bool,
+        /// Simulate with the paper trading account (no real funds)
+        #[arg(long)]
+        paper: bool,
     },
 
     /// Post multiple orders at once (authenticated)
@@ -250,6 +253,9 @@ pub enum ClobCommand {
         /// Order type: FOK or FAK (default: FOK)
         #[arg(long, default_value = "FOK")]
         order_type: CliOrderType,
+        /// Simulate with the paper trading account (no real funds)
+        #[arg(long)]
+        paper: bool,
     },
 
     /// Cancel an order by ID (authenticated)
@@ -666,7 +672,22 @@ pub async fn execute(
             size,
             order_type,
             post_only,
+            paper,
         } => {
+            // Paper mode (explicit flag or global toggle) bypasses wallet,
+            // signing, and the live exchange entirely.
+            if paper || crate::paper::store::is_enabled()? {
+                crate::output::paper::print_paper_notice(output);
+                let paper_side = match side {
+                    CliSide::Buy => crate::paper::types::TradeSide::Buy,
+                    CliSide::Sell => crate::paper::types::TradeSide::Sell,
+                };
+                return crate::commands::paper::limit_order(
+                    &token, paper_side, &price, &size, output,
+                )
+                .await;
+            }
+
             let signer = auth::resolve_signer(private_key)?;
             let client = auth::authenticate_with_signer(&signer, signature_type).await?;
 
@@ -746,7 +767,23 @@ pub async fn execute(
             side,
             amount,
             order_type,
+            paper,
         } => {
+            // Paper mode (explicit flag or global toggle) bypasses wallet,
+            // signing, and the live exchange entirely. Amount semantics match
+            // live orders: pUSD for buys, shares for sells.
+            if paper || crate::paper::store::is_enabled()? {
+                crate::output::paper::print_paper_notice(output);
+                return match side {
+                    CliSide::Buy => {
+                        crate::commands::paper::market_buy(&token, &amount, output).await
+                    }
+                    CliSide::Sell => {
+                        crate::commands::paper::market_sell(&token, &amount, output).await
+                    }
+                };
+            }
+
             let signer = auth::resolve_signer(private_key)?;
             let client = auth::authenticate_with_signer(&signer, signature_type).await?;
 

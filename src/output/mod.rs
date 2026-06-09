@@ -6,6 +6,7 @@ pub(crate) mod ctf;
 pub(crate) mod data;
 pub(crate) mod events;
 pub(crate) mod markets;
+pub(crate) mod paper;
 pub(crate) mod profiles;
 pub(crate) mod series;
 pub(crate) mod sports;

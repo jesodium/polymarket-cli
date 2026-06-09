@@ -2,6 +2,7 @@ mod auth;
 mod commands;
 mod config;
 mod output;
+mod paper;
 mod shell;
 
 use std::process::ExitCode;
@@ -52,6 +53,8 @@ enum Commands {
     Approve(commands::approve::ApproveArgs),
     /// Interact with the CLOB (order book, trading, balances)
     Clob(commands::clob::ClobArgs),
+    /// Paper trading: simulate orders with a virtual balance
+    Paper(commands::paper::PaperArgs),
     /// CTF operations: split, merge, redeem positions
     Ctf(commands::ctf::CtfArgs),
     /// Query on-chain data (positions, trades, leaderboards)
@@ -123,6 +126,7 @@ pub(crate) async fn run(cli: Cli) -> anyhow::Result<()> {
             )
             .await
         }
+        Commands::Paper(args) => commands::paper::execute(args, cli.output).await,
         Commands::Data(args) => commands::data::execute(&data, args, cli.output).await,
         Commands::Bridge(args) => commands::bridge::execute(&bridge, args, cli.output).await,
         Commands::Wallet(args) => {
