@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use serde_json::Value;
 
 use super::Strategy;
-use super::strategies::{mean_reversion, momentum};
+use super::strategies::{mean_reversion, momentum, tp_sl};
 
 /// Static description of an available strategy, for listings/UI.
 pub(crate) struct StrategyMeta {
@@ -29,6 +29,12 @@ pub(crate) fn available() -> Vec<StrategyMeta> {
             kind: "mean_reversion",
             summary: "Contrarian: fades deviations from a moving average.",
             default_params: serde_json::to_value(mean_reversion::Params::default())
+                .unwrap_or(Value::Null),
+        },
+        StrategyMeta {
+            kind: "tp_sl",
+            summary: "Take-profit / stop-loss guard: auto-exits a held position.",
+            default_params: serde_json::to_value(tp_sl::Params::default())
                 .unwrap_or(Value::Null),
         },
     ]
@@ -54,6 +60,10 @@ pub(crate) fn build(kind: &str, params: &Value) -> Result<Box<dyn Strategy>> {
         "mean_reversion" => {
             let p: mean_reversion::Params = parse(params)?;
             Ok(Box::new(mean_reversion::MeanReversion::new(p)))
+        }
+        "tp_sl" => {
+            let p: tp_sl::Params = parse(params)?;
+            Ok(Box::new(tp_sl::TpSl::new(p)))
         }
         other => bail!("Unknown strategy '{other}'. Run `polymarket strategy list` to see options"),
     }

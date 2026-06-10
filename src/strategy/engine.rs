@@ -165,12 +165,14 @@ impl StrategyEngine {
 
     fn build_instance(c: &StrategyConfig) -> Result<Instance> {
         let strat = registry::build(&c.kind, &c.params)?;
+        // Normalize hex/decimal token IDs so they match position/book keys.
+        let tokens = c.tokens.iter().map(|t| quotes::canonical_token_id(t)).collect();
         Ok(Instance {
             id: c.id.clone(),
             kind: c.kind.clone(),
             enabled: c.enabled,
             running: false,
-            tokens: c.tokens.clone(),
+            tokens,
             params: c.params.clone(),
             strat,
             history: HashMap::new(),
@@ -194,9 +196,24 @@ impl StrategyEngine {
 
     /// Add a new strategy instance and persist the roster.
     pub fn add(&self, id: &str, kind: &str, tokens: Vec<String>) -> Result<()> {
+        self.add_with_params(id, kind, tokens, Value::Null)
+    }
+
+    /// Add a new strategy instance with explicit parameters. `Null` params
+    /// fall back to the kind's defaults.
+    pub fn add_with_params(
+        &self,
+        id: &str,
+        kind: &str,
+        tokens: Vec<String>,
+        params: Value,
+    ) -> Result<()> {
         let mut cfg = StrategyConfig::new(id, kind);
         cfg.tokens = tokens;
         cfg.enabled = true;
+        if !params.is_null() {
+            cfg.params = params;
+        }
         let instance = Self::build_instance(&cfg)?;
         {
             let mut st = self.state.lock().unwrap();

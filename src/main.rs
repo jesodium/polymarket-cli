@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod output;
 mod paper;
+mod settings;
 mod shell;
 mod strategy;
 mod trade;
@@ -47,6 +48,8 @@ enum Commands {
     Shell,
     /// Local autonomous strategy engine (list, run, status, logs)
     Strategy(commands::strategy::StrategyArgs),
+    /// View and edit trading settings (mode, presets, slippage, TP/SL)
+    Settings(commands::settings::SettingsArgs),
     /// Interact with markets
     Markets(commands::markets::MarketsArgs),
     /// Interact with events
@@ -106,6 +109,7 @@ pub(crate) async fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Tui { paper } => Box::pin(tui::run(paper)).await,
         Commands::Shell => Box::pin(shell::run_shell()).await,
         Commands::Strategy(args) => commands::strategy::execute(args, cli.output).await,
+        Commands::Settings(args) => commands::settings::execute(args, cli.output),
         Commands::Markets(args) => commands::markets::execute(&gamma, args, cli.output).await,
         Commands::Events(args) => commands::events::execute(&gamma, args, cli.output).await,
         Commands::Tags(args) => commands::tags::execute(&gamma, args, cli.output).await,

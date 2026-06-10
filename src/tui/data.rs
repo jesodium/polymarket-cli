@@ -52,6 +52,8 @@ pub(crate) struct SharedData {
     pub connected: bool,
     /// Transient one-line notices (e.g. live-order results) for the status bar.
     pub notices: Vec<String>,
+    /// Open orders at the CLOB (live mode only), refreshed on the slow cadence.
+    pub live_orders: Vec<live::LiveOpenOrder>,
     /// Results of the most recent market search, and the query they answer
     /// (so the UI can tell fresh results from a stale/in-flight query).
     pub search_results: Vec<MarketRow>,
@@ -88,6 +90,12 @@ pub(crate) async fn refresher(
         if let Some(user) = live_user {
             let live_acct = live::fetch_account(user, market_ticks == 0).await;
             hydrate(&account, live_acct);
+            // Open orders need an authenticated call — slow cadence only.
+            if market_ticks == 0
+                && let Ok(orders) = live::fetch_open_orders().await
+            {
+                shared.lock().unwrap().live_orders = orders;
+            }
         }
 
         // Refresh the markets list roughly every ~30s (every 6th 5s pass).

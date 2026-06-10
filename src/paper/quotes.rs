@@ -16,6 +16,14 @@ pub(crate) fn parse_token_id(s: &str) -> Result<U256> {
     U256::from_str(s).map_err(|_| anyhow::anyhow!("Invalid token ID: {s}"))
 }
 
+/// Canonical (decimal-string) form of a token ID. Polymarket surfaces token
+/// IDs both as decimal and 0x-hex; positions and books are keyed by the
+/// decimal form everywhere in this app, so normalize at the boundary.
+/// Unparseable input passes through so the caller's own error surfaces later.
+pub(crate) fn canonical_token_id(s: &str) -> String {
+    parse_token_id(s.trim()).map_or_else(|_| s.trim().to_string(), |u| u.to_string())
+}
+
 /// Order book sides as `(price, size)` levels, best price first.
 pub(crate) struct BookLevels {
     pub bids: Vec<(Decimal, Decimal)>,
@@ -151,4 +159,26 @@ pub(crate) async fn settle_resting_orders(
         super::store::save(account)?;
     }
     Ok(fills)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_token_id_converts_hex_to_decimal() {
+        assert_eq!(canonical_token_id("0xff"), "255");
+        assert_eq!(
+            canonical_token_id(
+                "0xd8b6c36e23f1e9363cbee5692794deb1faa3a8e95fa3255f01d53fbb68c68b43"
+            ),
+            "98022490269692409998126496127597032490334070080325855126491859374983463996227"
+        );
+    }
+
+    #[test]
+    fn canonical_token_id_keeps_decimal_and_junk() {
+        assert_eq!(canonical_token_id(" 12345 "), "12345");
+        assert_eq!(canonical_token_id("not-a-token"), "not-a-token");
+    }
 }

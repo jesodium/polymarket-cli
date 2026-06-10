@@ -4,3 +4,4 @@
 
 pub(crate) mod mean_reversion;
 pub(crate) mod momentum;
+pub(crate) mod tp_sl;

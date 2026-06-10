@@ -11,7 +11,9 @@ use ratatui::widgets::{
     Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState, Wrap,
 };
 
-use super::app::{App, ModalField, OrderModal, ResetModal, View};
+use super::app::{
+    App, ModalField, OrderModal, ResetModal, SETTING_ROWS, SettingRow, SettingsEditModal, View,
+};
 use crate::paper::engine;
 use crate::paper::types::{OrderKind, TradeSide};
 
@@ -74,6 +76,9 @@ pub(crate) fn render(f: &mut Frame, app: &App) {
     if let Some(rm) = &app.reset_modal {
         render_reset_modal(f, rm);
     }
+    if let Some(sem) = &app.settings_modal {
+        render_settings_modal(f, sem);
+    }
 }
 
 fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
@@ -128,7 +133,9 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         View::MarketDetail => "←→ outcome · b buy · s sell · g attach strategy · Esc back",
         View::Orders => "↑↓ move · c cancel · Tab views",
         View::Strategies => "n new · s start · x stop · e enable · d disable · ↑↓ move",
-        View::Settings => "r reset paper account · mode fixed at launch (--paper) · Tab views",
+        View::Settings => {
+            "↑↓ move · Enter edit/cycle · w reveal key · r reset paper account · Tab views"
+        }
         _ => "Tab/1-9 switch views · ↑↓ move · ? help · q or Ctrl+C quit",
     };
     let mc = mode_color(app);
@@ -571,18 +578,7 @@ fn positions(f: &mut Frame, app: &App, area: Rect) {
 
 fn orders(f: &mut Frame, app: &App, area: Rect) {
     if app.live {
-        f.render_widget(
-            Paragraph::new(vec![
-                Line::from("Live open orders are managed at the CLOB.".fg(GOLD)),
-                Line::from(""),
-                Line::from("View:   polymarket clob orders".fg(DIM)),
-                Line::from("Cancel: polymarket clob cancel <id>".fg(DIM)),
-                Line::from(""),
-                Line::from("(In-terminal live order management is on the roadmap.)".fg(DIM)),
-            ])
-            .block(panel("Open Orders · LIVE")),
-            area,
-        );
+        live_orders(f, app, area);
         return;
     }
     let acct = app.account.lock().unwrap();
@@ -626,6 +622,66 @@ fn orders(f: &mut Frame, app: &App, area: Rect) {
     .row_highlight_style(highlight())
     .highlight_symbol("▶ ");
     f.render_stateful_widget(table, area, &mut sel_state(app.orders_sel, open.len()));
+}
+
+/// Live open orders at the CLOB, refreshed on the slow cadence.
+fn live_orders(f: &mut Frame, app: &App, area: Rect) {
+    let orders = app.data.lock().unwrap().live_orders.clone();
+    if orders.is_empty() {
+        f.render_widget(
+            Paragraph::new(vec![
+                Line::from("No open orders at the CLOB.".fg(DIM)),
+                Line::from(""),
+                Line::from("Orders refresh about every 30s; place one with b/s on a market.".fg(DIM)),
+            ])
+            .block(panel("Open Orders · LIVE")),
+            area,
+        );
+        return;
+    }
+    let rows: Vec<Row> = orders
+        .iter()
+        .enumerate()
+        .map(|(i, o)| {
+            let side_color = if o.side.eq_ignore_ascii_case("buy") {
+                GOOD
+            } else {
+                BAD
+            };
+            Row::new(vec![
+                Cell::from(truncate(&o.id, 12)),
+                Cell::from(o.side.clone()).style(Style::default().fg(side_color)),
+                Cell::from(truncate(&o.outcome, 12)),
+                Cell::from(o.price.clone()),
+                Cell::from(o.size.clone()),
+                Cell::from(o.matched.clone()),
+                Cell::from(o.created_at.clone()),
+            ])
+            .style(zebra(i))
+        })
+        .collect();
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(13),
+            Constraint::Length(5),
+            Constraint::Length(12),
+            Constraint::Length(8),
+            Constraint::Length(9),
+            Constraint::Length(9),
+            Constraint::Length(12),
+        ],
+    )
+    .header(header_row(&[
+        "ID", "Side", "Outcome", "Price", "Size", "Matched", "Created",
+    ]))
+    .block(panel(&format!(
+        "Open Orders · LIVE ({}) — c to cancel",
+        orders.len()
+    )))
+    .row_highlight_style(highlight())
+    .highlight_symbol("▶ ");
+    f.render_stateful_widget(table, area, &mut sel_state(app.orders_sel, orders.len()));
 }
 
 // --- History ---------------------------------------------------------------
@@ -823,13 +879,119 @@ fn logs(f: &mut Frame, app: &App, area: Rect) {
 // --- Settings --------------------------------------------------------------
 
 fn settings(f: &mut Frame, app: &App, area: Rect) {
-    let acct = app.account.lock().unwrap();
-    let initial = acct.initial_balance;
-    let cash = acct.cash;
-    drop(acct);
-    let cfg = crate::config::config_path()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(area);
+
+    render_trading_settings(f, app, cols[0]);
+
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(10), Constraint::Length(9)])
+        .split(cols[1]);
+    render_wallet_panel(f, app, right[0]);
+    render_session_panel(f, app, right[1]);
+}
+
+/// Left panel: the editable PolyGun-style trading settings.
+fn render_trading_settings(f: &mut Frame, app: &App, area: Rect) {
+    let s = &app.settings;
+    let mode_value = format!("{} — {}", s.trading_mode, s.trading_mode.describe());
+    let rows: Vec<Row> = SETTING_ROWS
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let (label, value) = match row {
+                SettingRow::Mode => ("Trading mode", mode_value.clone()),
+                SettingRow::Field(field) => {
+                    let v = app.setting_current_value(*field);
+                    let v = if v.is_empty() { "off".to_string() } else { v };
+                    (field.label(), v)
+                }
+            };
+            Row::new(vec![Cell::from(label), Cell::from(value)]).style(zebra(i))
+        })
+        .collect();
+    let table = Table::new(rows, [Constraint::Length(34), Constraint::Min(20)])
+        .header(header_row(&["Setting", "Value"]))
+        .block(panel("Trading Settings — Enter to edit / cycle"))
+        .row_highlight_style(highlight())
+        .highlight_symbol("▶ ");
+    f.render_stateful_widget(
+        table,
+        area,
+        &mut sel_state(app.settings_sel, SETTING_ROWS.len()),
+    );
+}
+
+/// Right-top panel: the wallet behind live mode (or paper-account info).
+fn render_wallet_panel(f: &mut Frame, app: &App, area: Rect) {
+    let mut lines: Vec<Line> = Vec::new();
+    match &app.wallet {
+        Some(w) => {
+            lines.push(kv_line("Signer (EOA)", &w.eoa));
+            match &w.proxy {
+                Some(p) => lines.push(kv_line("Proxy wallet", p)),
+                None => lines.push(kv_line("Proxy wallet", "—")),
+            }
+            lines.push(kv_line("Trading as", &w.trading));
+            lines.push(kv_line("Signature type", &w.signature_type));
+            {
+                let cash = app.account.lock().unwrap().cash;
+                lines.push(kv_line("Balance (pUSD)", &money(cash)));
+            }
+            lines.push(kv_line("Config file", &w.config_path));
+            lines.push(Line::from(""));
+            if app.reveal_key {
+                lines.push(Line::from(Span::styled(
+                    "⚠ PRIVATE KEY — press w to hide:",
+                    Style::default().fg(LIVE).bold(),
+                )));
+                lines.push(Line::from(Span::styled(
+                    w.private_key.clone().unwrap_or_default(),
+                    Style::default().fg(GOLD),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    "Press w to reveal/export the private key.",
+                    Style::default().fg(DIM),
+                )));
+            }
+        }
+        None => {
+            let acct = app.account.lock().unwrap();
+            let initial = acct.initial_balance;
+            let cash = acct.cash;
+            drop(acct);
+            lines.push(kv_line("Starting balance", &money(initial)));
+            lines.push(kv_line("Cash", &money(cash)));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Press r to reset the paper account.",
+                Style::default().fg(GOLD),
+            )));
+            lines.push(Line::from(
+                "Run `polymarket wallet create` then relaunch without --paper for live mode."
+                    .fg(DIM),
+            ));
+        }
+    }
+    let title = if app.live {
+        "Wallet · LIVE"
+    } else {
+        "Paper Account"
+    };
+    f.render_widget(
+        Paragraph::new(lines)
+            .block(panel(title))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+/// Right-bottom panel: session/engine facts.
+fn render_session_panel(f: &mut Frame, app: &App, area: Rect) {
     let (mode_text, mode_col) = if app.live {
         ("LIVE — real wallet & CLOB", LIVE)
     } else {
@@ -840,46 +1002,26 @@ fn settings(f: &mut Frame, app: &App, area: Rect) {
     } else {
         "Relaunch with `polymarket tui` (no --paper) for live trading."
     };
+    let (ticks, last) = app.engine.runtime_stats();
+    let last = last
+        .map(|t| t.format("%H:%M:%S").to_string())
+        .unwrap_or_else(|| "—".into());
+    let settings_file = crate::settings::config_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
     let lines = vec![
-        Line::from("Settings".bold()),
-        Line::from(""),
         Line::from(vec![
             Span::styled(format!("{:<22}", "Mode"), Style::default().fg(DIM)),
             Span::styled(mode_text, Style::default().fg(mode_col).bold()),
         ]),
-        kv_line(
-            if app.live {
-                "Cash (live)"
-            } else {
-                "Starting balance"
-            },
-            &money(initial),
-        ),
-        kv_line("Cash", &money(cash)),
         kv_line("Strategy tick", &format!("{}s", app.engine.tick_secs())),
-        {
-            let (ticks, last) = app.engine.runtime_stats();
-            let last = last
-                .map(|t| t.format("%H:%M:%S").to_string())
-                .unwrap_or_else(|| "—".into());
-            kv_line("Engine ticks", &format!("{ticks} (last {last})"))
-        },
-        Line::from(""),
-        kv_line("Wallet config", &cfg),
-        Line::from(""),
-        Line::from(format!("Mode is set at launch and fixed for the session. {relaunch}").fg(DIM)),
-        if app.live {
-            Line::from("Strategies & paper account live under ~/.config/polymarket/".fg(DIM))
-        } else {
-            Line::from(Span::styled(
-                "Press r to reset the paper account (choose a new starting balance).",
-                Style::default().fg(GOLD),
-            ))
-        },
+        kv_line("Engine ticks", &format!("{ticks} (last {last})")),
+        kv_line("Settings file", &settings_file),
+        Line::from(format!("Mode fixed for the session. {relaunch}").fg(DIM)),
     ];
     f.render_widget(
         Paragraph::new(lines)
-            .block(panel("Settings"))
+            .block(panel("Session"))
             .wrap(Wrap { trim: true }),
         area,
     );
@@ -888,7 +1030,7 @@ fn settings(f: &mut Frame, app: &App, area: Rect) {
 // --- Modal -----------------------------------------------------------------
 
 fn render_modal(f: &mut Frame, app: &App, m: &OrderModal) {
-    let area = centered_rect(58, 16, f.area());
+    let area = centered_rect(60, 22, f.area());
     f.render_widget(Clear, area);
     let side = m.side.to_string();
     let venue = if app.live { "LIVE" } else { "PAPER" };
@@ -930,7 +1072,50 @@ fn render_modal(f: &mut Frame, app: &App, m: &OrderModal) {
             ));
         }
     }
+    // Take-profit / stop-loss guard fields on buys (auto-attached on fill).
+    if m.side == TradeSide::Buy {
+        lines.push(field_line(
+            "Take-profit %",
+            &m.tp,
+            m.field == ModalField::TakeProfit,
+        ));
+        lines.push(field_line(
+            "Stop-loss %",
+            &m.sl,
+            m.field == ModalField::StopLoss,
+        ));
+    }
+    // Preset hint: one-tap quickbuy $ / quicksell % from Settings.
+    let preset_hint = match m.side {
+        TradeSide::Buy => format!(
+            "p quick-fill: {}",
+            crate::settings::fmt_money_list(&app.settings.quickbuy_presets)
+        ),
+        TradeSide::Sell => format!(
+            "p quick-fill: {} of {} held",
+            crate::settings::fmt_pct_list(&app.settings.quicksell_presets),
+            m.held.round_dp(2)
+        ),
+    };
+    lines.push(Line::from(Span::styled(
+        preset_hint,
+        Style::default().fg(DIM),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!(
+            "slippage {}% · mode {}",
+            app.settings.slippage_pct.normalize(),
+            app.settings.trading_mode
+        ),
+        Style::default().fg(DIM),
+    )));
     lines.push(Line::from(""));
+    if m.awaiting_confirm {
+        lines.push(Line::from(Span::styled(
+            "CONFIRM ORDER — Enter to send, Esc to cancel.",
+            Style::default().fg(GOLD).bold(),
+        )));
+    }
     if let Some(err) = &m.error {
         lines.push(Line::from(Span::styled(
             err.clone(),
@@ -938,7 +1123,7 @@ fn render_modal(f: &mut Frame, app: &App, m: &OrderModal) {
         )));
     }
     lines.push(Line::from(
-        "Tab next field · Enter submit · Esc cancel".fg(DIM),
+        "Tab next field · p preset · Enter submit · Esc cancel".fg(DIM),
     ));
 
     let border = if app.live {
@@ -1018,6 +1203,30 @@ fn render_reset_modal(f: &mut Frame, m: &ResetModal) {
         .borders(Borders::ALL)
         .title(" RESET PAPER ACCOUNT ".bold())
         .border_style(Style::default().fg(GOLD));
+    f.render_widget(
+        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn render_settings_modal(f: &mut Frame, m: &SettingsEditModal) {
+    let area = centered_rect(56, 11, f.area());
+    f.render_widget(Clear, area);
+    let lines = vec![
+        Line::from("Edit setting".bold()),
+        Line::from(""),
+        field_line(m.field.label(), &m.input, true),
+        Line::from(""),
+        match &m.error {
+            Some(e) => Line::from(Span::styled(e.clone(), Style::default().fg(BAD))),
+            None => Line::from("Lists are comma separated. Blank turns optional values off.".fg(DIM)),
+        },
+        Line::from("Enter save · Esc cancel".fg(DIM)),
+    ];
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" EDIT SETTING ".bold())
+        .border_style(Style::default().fg(ACCENT));
     f.render_widget(
         Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
         area,

@@ -86,7 +86,11 @@ impl Strategy for MeanReversion {
             } else if mid > sma + band && t.position_size > Decimal::ZERO && t.best_bid.is_some() {
                 signals.push(Signal::MarketSell {
                     token_id: t.token_id.clone(),
-                    shares: t.position_size.round_dp(2),
+                    // Round down — rounding up past the held size gets the
+                    // sell rejected.
+                    shares: t
+                        .position_size
+                        .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::ToZero),
                 });
             }
         }

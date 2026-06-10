@@ -34,6 +34,74 @@ fn validate_positive(value: Decimal, label: &str) -> Result<()> {
     Ok(())
 }
 
+/// Pre-trade slippage guard: estimate the average fill price of a market
+/// order against the current book and reject it when that price strays more
+/// than `max_pct` percent from the touch (best ask for buys, best bid for
+/// sells). Pure estimation — nothing is executed.
+pub(crate) fn check_slippage(
+    levels: &[(Decimal, Decimal)],
+    side: TradeSide,
+    amount: Decimal,
+    max_pct: Decimal,
+) -> Result<()> {
+    if max_pct <= Decimal::ZERO || amount <= Decimal::ZERO {
+        return Ok(()); // guard off or nothing to size
+    }
+    let Some(&(touch, _)) = levels.first() else {
+        return Ok(()); // no book — let execution produce its own error
+    };
+    let avg = match side {
+        // `amount` is a pUSD budget walked down the asks.
+        TradeSide::Buy => {
+            let mut remaining = amount;
+            let mut shares = Decimal::ZERO;
+            let mut cost = Decimal::ZERO;
+            for &(price, size) in levels {
+                if remaining <= Decimal::ZERO {
+                    break;
+                }
+                let take_cost = remaining.min(price * size);
+                shares += take_cost / price;
+                cost += take_cost;
+                remaining -= take_cost;
+            }
+            if shares <= Decimal::ZERO {
+                return Ok(());
+            }
+            cost / shares
+        }
+        // `amount` is shares walked down the bids.
+        TradeSide::Sell => {
+            let mut remaining = amount;
+            let mut proceeds = Decimal::ZERO;
+            let mut sold = Decimal::ZERO;
+            for &(price, size) in levels {
+                if remaining <= Decimal::ZERO {
+                    break;
+                }
+                let take = remaining.min(size);
+                proceeds += take * price;
+                sold += take;
+                remaining -= take;
+            }
+            if sold <= Decimal::ZERO {
+                return Ok(());
+            }
+            proceeds / sold
+        }
+    };
+    let drift_pct = ((avg - touch) / touch * Decimal::ONE_HUNDRED).abs();
+    if drift_pct > max_pct {
+        bail!(
+            "Slippage {:.2}% exceeds the {max_pct}% tolerance (avg fill {} vs touch {touch}). \
+             Raise it in Settings or trade smaller.",
+            drift_pct,
+            avg.round_dp(4)
+        );
+    }
+    Ok(())
+}
+
 /// Buy with a pUSD budget by walking the ask side of the book (best first).
 /// Fails if the book can't absorb the full amount (FOK semantics).
 pub(crate) fn market_buy(
@@ -767,6 +835,34 @@ mod tests {
         assert_eq!(stats.worst_trade.unwrap().realized_pnl, Some(dec!(-10)));
         assert_eq!(stats.daily_pnl.len(), 1);
         assert_eq!(stats.equity_curve.last().unwrap().1, dec!(10_000));
+    }
+
+    #[test]
+    fn slippage_passes_at_the_touch() {
+        // Whole order fills at the best ask — zero drift.
+        let asks = [(dec!(0.50), dec!(1_000))];
+        assert!(check_slippage(&asks, TradeSide::Buy, dec!(100), dec!(2)).is_ok());
+    }
+
+    #[test]
+    fn slippage_rejects_deep_walks() {
+        // $50 at 0.50, then the book jumps to 0.90: avg well past 2%.
+        let asks = [(dec!(0.50), dec!(100)), (dec!(0.90), dec!(1_000))];
+        let err = check_slippage(&asks, TradeSide::Buy, dec!(500), dec!(2)).unwrap_err();
+        assert!(err.to_string().contains("Slippage"));
+    }
+
+    #[test]
+    fn slippage_checks_sells_against_best_bid() {
+        let bids = [(dec!(0.50), dec!(10)), (dec!(0.30), dec!(1_000))];
+        assert!(check_slippage(&bids, TradeSide::Sell, dec!(10), dec!(2)).is_ok());
+        assert!(check_slippage(&bids, TradeSide::Sell, dec!(500), dec!(2)).is_err());
+    }
+
+    #[test]
+    fn slippage_guard_off_when_zero() {
+        let asks = [(dec!(0.10), dec!(1)), (dec!(0.99), dec!(10_000))];
+        assert!(check_slippage(&asks, TradeSide::Buy, dec!(1_000), dec!(0)).is_ok());
     }
 
     #[test]

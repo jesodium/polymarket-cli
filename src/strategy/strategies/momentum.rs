@@ -90,7 +90,11 @@ impl Strategy for Momentum {
                 && t.position_size > Decimal::ZERO
                 && t.best_bid.is_some()
             {
-                let shares = (t.position_size * sell_fraction).round_dp(2);
+                // Round down and cap at the held size — rounding up past the
+                // position gets the sell rejected.
+                let shares = (t.position_size * sell_fraction)
+                    .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::ToZero)
+                    .min(t.position_size);
                 if shares > Decimal::ZERO {
                     signals.push(Signal::MarketSell {
                         token_id: t.token_id.clone(),

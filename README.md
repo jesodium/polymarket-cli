@@ -27,7 +27,9 @@
 | 🧾 Market & limit orders | ✅ | Buy/sell, open orders, cancel, history |
 | 🧪 Paper trading | ✅ | $10k virtual account, realistic book-driven fills |
 | 🖥️ Trading terminal (TUI) | ✅ | 10 views, live order book, modal order entry |
-| 🤖 Local strategy engine | ✅ | Plugins, `momentum` + `mean_reversion`, live logs |
+| 🤖 Local strategy engine | ✅ | Plugins: `momentum`, `mean_reversion`, `tp_sl`, live logs |
+| 🎯 Take-profit / stop-loss | ✅ | Per-position exit guard: TP %, SL %, trailing stop |
+| ⚙️ Trading settings | ✅ | Cautious/Standard/Expert modes, quickbuy/quicksell presets |
 | 💸 Live trading | 🚧 | Real CLOB orders wired — **untested with real funds** |
 | 🛡️ Risk caps / kill-switch | ⏳ | Planned before autonomous live is safe |
 | ☁️ Hosted agents | ⏳ | See [docs/ROADMAP.md](docs/ROADMAP.md) |
@@ -85,12 +87,22 @@ mode everything is simulated. Views (switch with `Tab` or `1`–`9`):
  ↑↓ move · Enter open · / search · b buy · s sell · g attach strategy · q quit
 ```
 
-- **Markets** — browse / search / sort, `Enter` to open a market.
+- **Markets** — browse / search / sort, `Enter` to open a market. Paste a
+  `polymarket.com` link into the search box to jump straight to that market.
 - **Market detail** — live order book, place market **and** limit orders from a
   modal (`b`/`s`), no commands typed; `g` attaches an autonomous strategy.
+  The buy ticket has take-profit / stop-loss fields and `p` cycles your
+  quickbuy ($) / quicksell (%) presets.
+- **Orders** — review open orders and cancel with `c`, in paper **and** live
+  mode (live orders sync from the CLOB).
 - **Strategies** — create a strategy in-terminal (`n` → pick plugin, enter
   tokens), then start / stop / enable / disable it and watch its signals,
   orders, and logs update live.
+- **Settings** — edit trading settings in place (`Enter` to edit / cycle):
+  trading mode (Cautious / Standard / Expert confirmation), confirmation
+  threshold, quickbuy/quicksell presets, slippage, and default TP/SL/trailing
+  levels. In live mode it also shows your wallet (EOA, proxy, balance) and can
+  reveal the private key for export (`w`).
 
 ## Local Strategy Engine
 
@@ -106,9 +118,45 @@ polymarket strategy status                            # roster + runtime stats
 polymarket strategy logs                              # tail engine log
 ```
 
-Strategies are plugins under `src/strategy/strategies/` (ships with `momentum`
-and `mean_reversion`). See [docs/ROADMAP.md](docs/ROADMAP.md) and
+Strategies are plugins under `src/strategy/strategies/` (ships with
+`momentum`, `mean_reversion`, and `tp_sl` — a take-profit / stop-loss /
+trailing-stop exit guard). See [docs/ROADMAP.md](docs/ROADMAP.md) and
 [docs/HOSTED_AGENTS.md](docs/HOSTED_AGENTS.md).
+
+### Take-profit / stop-loss
+
+Attach an exit guard to any position — it market-sells when the mark hits your
+profit target, loss limit, or trails off its peak:
+
+```bash
+polymarket strategy add tp_sl --tokens <TOKEN_ID>   # +30% TP / -20% SL defaults
+polymarket strategy run
+```
+
+Or set defaults once and every buy from the TUI auto-arms a guard:
+
+```bash
+polymarket settings take-profit 40    # +40% take profit
+polymarket settings stop-loss 25      # -25% stop loss
+polymarket settings trailing 10       # 10% off peak (optional)
+```
+
+## Trading Settings
+
+PolyGun-style execution settings, shared by the TUI and CLI:
+
+```bash
+polymarket settings                   # show all
+polymarket settings mode expert       # cautious | standard | expert
+polymarket settings threshold 250     # Standard-mode confirm threshold ($)
+polymarket settings quickbuy 10,25,50,100
+polymarket settings quicksell 25,50,100
+polymarket settings slippage 2
+```
+
+- **Cautious** — every order asks for confirmation.
+- **Standard** (default) — only orders at/above the threshold confirm.
+- **Expert** — instant execution, no confirmation.
 
 ## Quick Start
 
