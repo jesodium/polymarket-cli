@@ -10,7 +10,9 @@ use super::data::{MarketRow, Shared};
 use super::live::LiveOrder;
 use crate::paper::engine as paper_engine;
 use crate::paper::store;
-use crate::paper::types::{MarketMeta, OrderKind, PaperAccount, Quote, TradeSide};
+use crate::paper::types::{
+    MarketMeta, OrderKind, PaperAccount, Quote, TradeSide, default_starting_balance,
+};
 use crate::strategy::engine::{LogLevel, StrategyEngine};
 use crate::strategy::registry;
 
@@ -91,6 +93,12 @@ pub(crate) struct StratModal {
     pub error: Option<String>,
 }
 
+/// Paper-account reset form: choose a starting balance, wipe everything else.
+pub(crate) struct ResetModal {
+    pub balance: String,
+    pub error: Option<String>,
+}
+
 pub(crate) struct App {
     pub view: View,
     pub should_quit: bool,
@@ -116,6 +124,8 @@ pub(crate) struct App {
     pub modal: Option<OrderModal>,
     /// New-strategy form (Strategies tab → `n`).
     pub strat_modal: Option<StratModal>,
+    /// Paper-account reset form (Settings tab → `r`).
+    pub reset_modal: Option<ResetModal>,
     pub status: String,
     /// True in LIVE mode (real wallet + CLOB), false for the paper account.
     pub live: bool,
@@ -151,6 +161,7 @@ impl App {
             detail_token: 0,
             modal: None,
             strat_modal: None,
+            reset_modal: None,
             status,
             live,
         }
@@ -250,6 +261,10 @@ impl App {
             self.strat_modal_key(key);
             return;
         }
+        if self.reset_modal.is_some() {
+            self.reset_modal_key(key);
+            return;
+        }
         // Search box on Markets captures input.
         if self.searching {
             match key.code {
@@ -338,6 +353,24 @@ impl App {
             }
             KeyCode::Char('d') if self.view == View::Strategies => {
                 self.strategy_action(StratAct::Disable)
+            }
+            // Settings: reset the paper account.
+            KeyCode::Char('r') if self.view == View::Settings => {
+                if self.live {
+                    self.status =
+                        "Reset only applies to the paper account. Relaunch with `--paper`.".into();
+                } else {
+                    let current = self.account.lock().unwrap().initial_balance;
+                    let prefill = if current > Decimal::ZERO {
+                        current.round_dp(0).to_string()
+                    } else {
+                        default_starting_balance().round_dp(0).to_string()
+                    };
+                    self.reset_modal = Some(ResetModal {
+                        balance: prefill,
+                        error: None,
+                    });
+                }
             }
             _ => {}
         }
@@ -695,6 +728,64 @@ impl App {
             .map(|n| format!("{kind}-{n}"))
             .find(|cand| !existing.contains(cand))
             .unwrap_or_else(|| kind.to_string())
+    }
+
+    // --- Reset paper account ----------------------------------------------
+
+    fn reset_modal_key(&mut self, key: KeyEvent) {
+        let Some(m) = self.reset_modal.as_mut() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => self.reset_modal = None,
+            KeyCode::Backspace => {
+                m.balance.pop();
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() || c == '.' => m.balance.push(c),
+            KeyCode::Enter => self.submit_reset(),
+            _ => {}
+        }
+    }
+
+    fn submit_reset(&mut self) {
+        let bal_s = match self.reset_modal.as_ref() {
+            Some(m) => m.balance.clone(),
+            None => return,
+        };
+        let balance = if bal_s.trim().is_empty() {
+            default_starting_balance()
+        } else {
+            match parse_dec(&bal_s) {
+                Ok(b) => b,
+                Err(e) => {
+                    if let Some(m) = self.reset_modal.as_mut() {
+                        m.error = Some(e.to_string());
+                    }
+                    return;
+                }
+            }
+        };
+        if balance <= Decimal::ZERO {
+            if let Some(m) = self.reset_modal.as_mut() {
+                m.error = Some("Balance must be positive.".into());
+            }
+            return;
+        }
+
+        // Wipe the account and start fresh; the engine shares this handle.
+        {
+            let mut acct = self.account.lock().unwrap();
+            *acct = PaperAccount::new(balance, true);
+            let _ = store::save(&acct);
+        }
+        self.positions_sel = 0;
+        self.orders_sel = 0;
+        self.history_scroll = 0;
+        self.status = format!(
+            "Paper account reset — fresh ${} balance, positions and history cleared.",
+            balance.round_dp(2)
+        );
+        self.reset_modal = None;
     }
 
     // --- Orders ------------------------------------------------------------

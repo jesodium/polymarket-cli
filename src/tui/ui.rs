@@ -11,7 +11,7 @@ use ratatui::widgets::{
     Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState, Wrap,
 };
 
-use super::app::{App, ModalField, OrderModal, View};
+use super::app::{App, ModalField, OrderModal, ResetModal, View};
 use crate::paper::engine;
 use crate::paper::types::{OrderKind, TradeSide};
 
@@ -71,6 +71,9 @@ pub(crate) fn render(f: &mut Frame, app: &App) {
     if let Some(sm) = &app.strat_modal {
         render_strat_modal(f, sm);
     }
+    if let Some(rm) = &app.reset_modal {
+        render_reset_modal(f, rm);
+    }
 }
 
 fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
@@ -125,7 +128,7 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         View::MarketDetail => "←→ outcome · b buy · s sell · g attach strategy · Esc back",
         View::Orders => "↑↓ move · c cancel · Tab views",
         View::Strategies => "n new · s start · x stop · e enable · d disable · ↑↓ move",
-        View::Settings => "Mode is fixed at launch (--paper) · Tab views",
+        View::Settings => "r reset paper account · mode fixed at launch (--paper) · Tab views",
         _ => "Tab/1-9 switch views · ↑↓ move · ? help · q or Ctrl+C quit",
     };
     let mc = mode_color(app);
@@ -865,7 +868,14 @@ fn settings(f: &mut Frame, app: &App, area: Rect) {
         kv_line("Wallet config", &cfg),
         Line::from(""),
         Line::from(format!("Mode is set at launch and fixed for the session. {relaunch}").fg(DIM)),
-        Line::from("Strategies & paper account live under ~/.config/polymarket/".fg(DIM)),
+        if app.live {
+            Line::from("Strategies & paper account live under ~/.config/polymarket/".fg(DIM))
+        } else {
+            Line::from(Span::styled(
+                "Press r to reset the paper account (choose a new starting balance).",
+                Style::default().fg(GOLD),
+            ))
+        },
     ];
     f.render_widget(
         Paragraph::new(lines)
@@ -980,6 +990,34 @@ fn render_strat_modal(f: &mut Frame, m: &super::app::StratModal) {
         .borders(Borders::ALL)
         .title(" NEW STRATEGY ".bold())
         .border_style(Style::default().fg(ACCENT));
+    f.render_widget(
+        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn render_reset_modal(f: &mut Frame, m: &ResetModal) {
+    let area = centered_rect(56, 12, f.area());
+    f.render_widget(Clear, area);
+    let lines = vec![
+        Line::from("Reset paper account".bold()),
+        Line::from(""),
+        Line::from(
+            "Wipes cash, positions, open orders, and trade history, then starts fresh.".fg(DIM),
+        ),
+        Line::from(""),
+        field_line("Starting balance ($)", &m.balance, true),
+        Line::from(""),
+        match &m.error {
+            Some(e) => Line::from(Span::styled(e.clone(), Style::default().fg(BAD))),
+            None => Line::from("Strategies are kept; only the account is reset.".fg(DIM)),
+        },
+        Line::from("Enter confirm · Esc cancel".fg(DIM)),
+    ];
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" RESET PAPER ACCOUNT ".bold())
+        .border_style(Style::default().fg(GOLD));
     f.render_widget(
         Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
         area,
