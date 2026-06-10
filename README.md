@@ -1,8 +1,36 @@
-# Polymarket CLI
+# Polymarket CLI & Trading Terminal
 
-Rust CLI for Polymarket. Browse markets, place orders, manage positions, and interact with onchain contracts — from a terminal or as a JSON API for scripts and agents.
+> A local-first prediction-market **trading terminal** for Polymarket — browse markets, place market & limit orders, run autonomous strategies, and manage positions from a keyboard-driven TUI (or as a JSON API for scripts and agents).
 
-> **Warning:** This is early, experimental software. Use at your own risk and do not use with large amounts of funds. APIs, commands, and behavior may change without notice. Always verify transactions before confirming.
+<p align="center">
+  <a href="https://github.com/jesodium/polymarket-cli/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jesodium/polymarket-cli/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Rust" src="https://img.shields.io/badge/rust-1.88%2B-orange?logo=rust&logoColor=white">
+  <img alt="TUI" src="https://img.shields.io/badge/TUI-ratatui-00b3b3?logo=gnometerminal&logoColor=white">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-yellow.svg">
+  <img alt="Status: WIP" src="https://img.shields.io/badge/status-heavily%20WIP-red">
+  <img alt="Paper trading" src="https://img.shields.io/badge/paper%20trading-yes-brightgreen">
+</p>
+
+> [!CAUTION]
+> **❗ THIS IS HEAVILY WORK IN PROGRESS, DO NOT PUT REAL MONEY UNLESS YOU ARE WILLING TO LOSE IT ❗**
+>
+> APIs, commands, on-chain interactions, and live order routing are experimental and **not battle-tested**. Live mode signs and submits **real orders with real funds**, and autonomous strategies can trade on their own with no built-in risk caps yet. Start with `--paper`. Verify every transaction. You are solely responsible for any losses.
+
+---
+
+### ✨ Feature status
+
+| Area | Status | Notes |
+| --- | :---: | --- |
+| 📈 Market & event browsing | ✅ | Gamma + CLOB data, JSON output |
+| 🧾 Market & limit orders | ✅ | Buy/sell, open orders, cancel, history |
+| 🧪 Paper trading | ✅ | $10k virtual account, realistic book-driven fills |
+| 🖥️ Trading terminal (TUI) | ✅ | 10 views, live order book, modal order entry |
+| 🤖 Local strategy engine | ✅ | Plugins, `momentum` + `mean_reversion`, live logs |
+| 💸 Live trading | 🚧 | Real CLOB orders wired — **untested with real funds** |
+| 🛡️ Risk caps / kill-switch | ⏳ | Planned before autonomous live is safe |
+| ☁️ Hosted agents | ⏳ | See [docs/ROADMAP.md](docs/ROADMAP.md) |
 
 ## Install
 
@@ -26,6 +54,61 @@ git clone https://github.com/jesodium/polymarket-cli
 cd polymarket-cli
 cargo install --path .
 ```
+
+## Trading Terminal (TUI)
+
+The primary interface is a keyboard-driven trading terminal — closer to a
+Bloomberg Terminal than a traditional CLI.
+
+```bash
+polymarket tui            # LIVE mode — real wallet + CLOB (needs a wallet)
+polymarket tui --paper    # PAPER mode — $10,000 simulated account, no wallet
+```
+
+The mode is shown in the top-left (red **⏺ LIVE** / green **◆ PAPER**) and
+colors the whole frame. In live mode the terminal mirrors your real balance and
+positions, and the order modal submits real signed orders to the CLOB; in paper
+mode everything is simulated. Views (switch with `Tab` or `1`–`9`):
+
+```
+ 1·Dashboard  2·Markets  3·Portfolio  4·Positions  5·Orders  6·History  7·Strategies  8·Logs  9·Settings
+┌─ POLYMARKET TERMINAL   ● live   142 markets ─────────────────────────────────┐
+├──────────────────────────────────────────────────────────────────────────────┤
+│ Portfolio Value │ Cash Balance │ Daily PnL  │ Total PnL                        │
+│   $10,240.00    │  $9,120.00   │  +$140.00  │  +$240.00                        │
+├───────────────────────────┬──────────────────────────────────────────────────┤
+│ Open Positions        3   │ Time      Side  Market               Size  Price  │
+│ Open Orders           2   │ 14:02:11  BUY   Will BTC top $100k…  100   0.612  │
+│ Running Strategies    1   │ 14:01:55  SELL  Fed cuts in March…    50   0.480  │
+│ ROI                +2.4%  │ …                                                  │
+└───────────────────────────┴──────────────────────────────────────────────────┘
+ ↑↓ move · Enter open · / search · b buy · s sell · g attach strategy · q quit
+```
+
+- **Markets** — browse / search / sort, `Enter` to open a market.
+- **Market detail** — live order book, place market **and** limit orders from a
+  modal (`b`/`s`), no commands typed; `g` attaches an autonomous strategy.
+- **Strategies** — create a strategy in-terminal (`n` → pick plugin, enter
+  tokens), then start / stop / enable / disable it and watch its signals,
+  orders, and logs update live.
+
+## Local Strategy Engine
+
+Run autonomous strategies locally. They receive live market data, generate
+signals, and place orders against the paper (or, in future, live) account —
+independently of the UI.
+
+```bash
+polymarket strategy list                              # available plugins + roster
+polymarket strategy add momentum --tokens <TOKEN_ID>  # configure an instance
+polymarket strategy run                               # run the engine (Ctrl-C to stop)
+polymarket strategy status                            # roster + runtime stats
+polymarket strategy logs                              # tail engine log
+```
+
+Strategies are plugins under `src/strategy/strategies/` (ships with `momentum`
+and `mean_reversion`). See [docs/ROADMAP.md](docs/ROADMAP.md) and
+[docs/HOSTED_AGENTS.md](docs/HOSTED_AGENTS.md).
 
 ## Quick Start
 

@@ -4,6 +4,9 @@ mod config;
 mod output;
 mod paper;
 mod shell;
+mod strategy;
+mod trade;
+mod tui;
 
 use std::process::ExitCode;
 
@@ -33,8 +36,17 @@ pub(crate) struct Cli {
 enum Commands {
     /// Guided first-time setup (wallet, proxy, approvals)
     Setup,
-    /// Launch interactive shell
+    /// Launch the interactive trading terminal (TUI) — the primary interface
+    Tui {
+        /// Trade against the paper account (simulated). Without this flag the
+        /// terminal runs in LIVE mode against your real wallet and the CLOB.
+        #[arg(long)]
+        paper: bool,
+    },
+    /// Launch the line-based interactive shell
     Shell,
+    /// Local autonomous strategy engine (list, run, status, logs)
+    Strategy(commands::strategy::StrategyArgs),
     /// Interact with markets
     Markets(commands::markets::MarketsArgs),
     /// Interact with events
@@ -91,7 +103,9 @@ pub(crate) async fn run(cli: Cli) -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Setup => commands::setup::execute(),
+        Commands::Tui { paper } => Box::pin(tui::run(paper)).await,
         Commands::Shell => Box::pin(shell::run_shell()).await,
+        Commands::Strategy(args) => commands::strategy::execute(args, cli.output).await,
         Commands::Markets(args) => commands::markets::execute(&gamma, args, cli.output).await,
         Commands::Events(args) => commands::events::execute(&gamma, args, cli.output).await,
         Commands::Tags(args) => commands::tags::execute(&gamma, args, cli.output).await,
