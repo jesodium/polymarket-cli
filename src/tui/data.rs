@@ -52,6 +52,10 @@ pub(crate) struct SharedData {
     pub connected: bool,
     /// Transient one-line notices (e.g. live-order results) for the status bar.
     pub notices: Vec<String>,
+    /// Results of the most recent market search, and the query they answer
+    /// (so the UI can tell fresh results from a stale/in-flight query).
+    pub search_results: Vec<MarketRow>,
+    pub search_results_query: String,
 }
 
 impl SharedData {
@@ -169,43 +173,74 @@ fn hydrate(account: &Arc<Mutex<PaperAccount>>, live: live::LiveAccount) {
     }
 }
 
+/// Flatten a Gamma market into the row the UI needs, skipping ones without
+/// CLOB tokens (not tradable).
+fn to_market_row(m: gamma::types::response::Market) -> Option<MarketRow> {
+    let token_ids: Vec<String> = m
+        .clob_token_ids
+        .as_ref()?
+        .iter()
+        .map(|id| id.to_string())
+        .collect();
+    if token_ids.is_empty() {
+        return None;
+    }
+    Some(MarketRow {
+        id: m.id,
+        question: m.question.unwrap_or_else(|| "(untitled)".to_string()),
+        token_ids,
+        outcomes: m.outcomes.unwrap_or_default(),
+        prices: m.outcome_prices.unwrap_or_default(),
+        volume: m.volume_num,
+        liquidity: m.liquidity_num,
+        closed: m.closed,
+        active: m.active,
+    })
+}
+
 async fn fetch_markets(client: &gamma::Client) -> anyhow::Result<Vec<MarketRow>> {
     let request = gamma::types::request::MarketsRequest::builder()
         .closed(false)
         .limit(150)
         .build();
     let markets = client.markets(&request).await?;
-
-    let mut rows: Vec<MarketRow> = markets
-        .into_iter()
-        .filter_map(|m| {
-            let token_ids: Vec<String> = m
-                .clob_token_ids
-                .as_ref()?
-                .iter()
-                .map(|id| id.to_string())
-                .collect();
-            if token_ids.is_empty() {
-                return None;
-            }
-            Some(MarketRow {
-                id: m.id,
-                question: m.question.unwrap_or_else(|| "(untitled)".to_string()),
-                token_ids,
-                outcomes: m.outcomes.unwrap_or_default(),
-                prices: m.outcome_prices.unwrap_or_default(),
-                volume: m.volume_num,
-                liquidity: m.liquidity_num,
-                closed: m.closed,
-                active: m.active,
-            })
-        })
-        .collect();
-
+    let mut rows: Vec<MarketRow> = markets.into_iter().filter_map(to_market_row).collect();
     rows.sort_by(|a, b| {
         b.volume
             .unwrap_or(Decimal::ZERO)
             .cmp(&a.volume.unwrap_or(Decimal::ZERO))
     });
     Ok(rows)
+}
+
+/// Search markets through the Gamma search API — the same endpoint the
+/// `markets search` command uses, so the TUI finds every market, not just the
+/// top-by-volume snapshot.
+pub(crate) async fn search_markets(query: &str) -> Vec<MarketRow> {
+    let client = gamma::Client::default();
+    let request = gamma::types::request::SearchRequest::builder()
+        .q(query.to_string())
+        .limit_per_type(30)
+        .build();
+    let Ok(results) = client.search(&request).await else {
+        return Vec::new();
+    };
+    results
+        .events
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|e| e.markets.unwrap_or_default())
+        .filter_map(to_market_row)
+        .collect()
+}
+
+/// Kick off a background search; results land in `search_results` keyed by the
+/// query so the UI shows them once they match the active query.
+pub(crate) fn run_search(shared: Shared, query: String) {
+    tokio::spawn(async move {
+        let rows = search_markets(&query).await;
+        let mut d = shared.lock().unwrap();
+        d.search_results = rows;
+        d.search_results_query = query;
+    });
 }

@@ -190,19 +190,45 @@ impl App {
         self.data.lock().unwrap().watch = tokens;
     }
 
-    /// Markets passing the current search filter, with original indices.
+    /// Markets to show: the default top-by-volume list, or live search results
+    /// from the Gamma search API when a query is active.
     pub fn filtered_markets(&self) -> Vec<MarketRow> {
+        let query = self.search.trim();
         let d = self.data.lock().unwrap();
-        if self.search.is_empty() {
+        if query.is_empty() {
             d.markets.clone()
+        } else if d.search_results_query.eq_ignore_ascii_case(query) {
+            d.search_results.clone()
         } else {
-            let needle = self.search.to_lowercase();
-            d.markets
-                .iter()
-                .filter(|m| m.question.to_lowercase().contains(&needle))
-                .cloned()
-                .collect()
+            // Search in flight — results for this query haven't arrived yet.
+            Vec::new()
         }
+    }
+
+    /// Fire a Gamma search for the current query (the real search endpoint,
+    /// not a filter over the loaded list).
+    fn run_market_search(&mut self) {
+        let query = self.search.trim().to_string();
+        self.markets_sel = 0;
+        if query.is_empty() {
+            return;
+        }
+        self.status = format!("Searching markets for “{query}”…");
+        super::data::run_search(Arc::clone(&self.data), query);
+    }
+
+    /// Whether a search is active but its results haven't arrived yet.
+    pub fn search_pending(&self) -> bool {
+        let query = self.search.trim();
+        if query.is_empty() {
+            return false;
+        }
+        !self
+            .data
+            .lock()
+            .unwrap()
+            .search_results_query
+            .eq_ignore_ascii_case(query)
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
@@ -231,7 +257,10 @@ impl App {
                     self.searching = false;
                     self.search.clear();
                 }
-                KeyCode::Enter => self.searching = false,
+                KeyCode::Enter => {
+                    self.searching = false;
+                    self.run_market_search();
+                }
                 KeyCode::Backspace => {
                     self.search.pop();
                 }
@@ -260,6 +289,10 @@ impl App {
             KeyCode::Esc => {
                 if self.view == View::MarketDetail {
                     self.view = View::Markets;
+                } else if self.view == View::Markets && !self.search.is_empty() {
+                    self.search.clear();
+                    self.markets_sel = 0;
+                    self.status = "Search cleared.".to_string();
                 }
             }
             KeyCode::Char('/') if self.view == View::Markets => {

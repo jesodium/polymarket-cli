@@ -257,12 +257,30 @@ fn markets(f: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let title = if app.searching {
-        format!("Markets — search: {}_", app.search)
+        format!("Markets — type query, Enter to search: {}_", app.search)
     } else if app.search.is_empty() {
         "Markets".to_string()
+    } else if app.search_pending() {
+        format!("Markets — searching “{}”…", app.search)
     } else {
-        format!("Markets — filter: {} ({} shown)", app.search, markets.len())
+        format!(
+            "Markets — search “{}” ({} result{})",
+            app.search,
+            markets.len(),
+            if markets.len() == 1 { "" } else { "s" }
+        )
     };
+
+    // Empty-state message when a finished search returned nothing.
+    if markets.is_empty() && !app.search.is_empty() {
+        let msg = if app.search_pending() {
+            format!("Searching Gamma for “{}”…", app.search)
+        } else {
+            format!("No markets match “{}”. Esc to clear.", app.search)
+        };
+        f.render_widget(Paragraph::new(msg.fg(DIM)).block(panel(&title)), area);
+        return;
+    }
 
     let table = Table::new(
         rows,
