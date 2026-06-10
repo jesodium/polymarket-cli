@@ -166,7 +166,11 @@ impl StrategyEngine {
     fn build_instance(c: &StrategyConfig) -> Result<Instance> {
         let strat = registry::build(&c.kind, &c.params)?;
         // Normalize hex/decimal token IDs so they match position/book keys.
-        let tokens = c.tokens.iter().map(|t| quotes::canonical_token_id(t)).collect();
+        let tokens = c
+            .tokens
+            .iter()
+            .map(|t| quotes::canonical_token_id(t))
+            .collect();
         Ok(Instance {
             id: c.id.clone(),
             kind: c.kind.clone(),

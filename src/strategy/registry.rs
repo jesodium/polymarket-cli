@@ -34,8 +34,7 @@ pub(crate) fn available() -> Vec<StrategyMeta> {
         StrategyMeta {
             kind: "tp_sl",
             summary: "Take-profit / stop-loss guard: auto-exits a held position.",
-            default_params: serde_json::to_value(tp_sl::Params::default())
-                .unwrap_or(Value::Null),
+            default_params: serde_json::to_value(tp_sl::Params::default()).unwrap_or(Value::Null),
         },
     ]
 }

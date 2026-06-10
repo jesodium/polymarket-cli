@@ -632,7 +632,9 @@ fn live_orders(f: &mut Frame, app: &App, area: Rect) {
             Paragraph::new(vec![
                 Line::from("No open orders at the CLOB.".fg(DIM)),
                 Line::from(""),
-                Line::from("Orders refresh about every 30s; place one with b/s on a market.".fg(DIM)),
+                Line::from(
+                    "Orders refresh about every 30s; place one with b/s on a market.".fg(DIM),
+                ),
             ])
             .block(panel("Open Orders · LIVE")),
             area,
@@ -1219,7 +1221,9 @@ fn render_settings_modal(f: &mut Frame, m: &SettingsEditModal) {
         Line::from(""),
         match &m.error {
             Some(e) => Line::from(Span::styled(e.clone(), Style::default().fg(BAD))),
-            None => Line::from("Lists are comma separated. Blank turns optional values off.".fg(DIM)),
+            None => {
+                Line::from("Lists are comma separated. Blank turns optional values off.".fg(DIM))
+            }
         },
         Line::from("Enter save · Esc cancel".fg(DIM)),
     ];

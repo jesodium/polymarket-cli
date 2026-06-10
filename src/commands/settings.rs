@@ -103,17 +103,33 @@ fn print_settings(s: &Settings, output: OutputFormat, changed: bool) {
             if changed {
                 println!("Settings updated.\n");
             }
-            let opt = |v: Option<Decimal>| v.map(|p| format!("{p}%")).unwrap_or_else(|| "off".into());
-            println!("Trading mode        {} — {}", s.trading_mode, s.trading_mode.describe());
-            println!("Confirm threshold   ${}", s.confirm_threshold_usd.normalize());
-            println!("Quickbuy presets    {}", settings::fmt_money_list(&s.quickbuy_presets));
-            println!("Quicksell presets   {}", settings::fmt_pct_list(&s.quicksell_presets));
+            let opt =
+                |v: Option<Decimal>| v.map(|p| format!("{p}%")).unwrap_or_else(|| "off".into());
+            println!(
+                "Trading mode        {} — {}",
+                s.trading_mode,
+                s.trading_mode.describe()
+            );
+            println!(
+                "Confirm threshold   ${}",
+                s.confirm_threshold_usd.normalize()
+            );
+            println!(
+                "Quickbuy presets    {}",
+                settings::fmt_money_list(&s.quickbuy_presets)
+            );
+            println!(
+                "Quicksell presets   {}",
+                settings::fmt_pct_list(&s.quicksell_presets)
+            );
             println!("Slippage tolerance  {}%", s.slippage_pct.normalize());
             println!("Default take-profit {}", opt(s.default_take_profit_pct));
             println!("Default stop-loss   {}", opt(s.default_stop_loss_pct));
             println!("Default trailing    {}", opt(s.default_trailing_stop_pct));
             if s.has_default_exit() {
-                println!("\nNew buys from the TUI auto-arm a tp_sl exit guard with these defaults.");
+                println!(
+                    "\nNew buys from the TUI auto-arm a tp_sl exit guard with these defaults."
+                );
             }
             if let Ok(p) = settings::config_path() {
                 println!("\nFile: {}", p.display());

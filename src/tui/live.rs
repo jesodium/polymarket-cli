@@ -46,7 +46,9 @@ pub(crate) fn wallet_info() -> Option<WalletInfo> {
     let proxy = derive_proxy_wallet(eoa, POLYGON);
     let signature_type = config::resolve_signature_type(None).unwrap_or_else(|_| "proxy".into());
     let trading = if signature_type == "proxy" {
-        proxy.map(|a| a.to_string()).unwrap_or_else(|| eoa.to_string())
+        proxy
+            .map(|a| a.to_string())
+            .unwrap_or_else(|| eoa.to_string())
     } else {
         eoa.to_string()
     };
@@ -152,7 +154,10 @@ pub(crate) async fn cancel_order(order_id: &str) -> Result<String> {
     let client = auth::authenticated_clob_client(None, None).await?;
     let result = client.cancel_order(order_id).await?;
     if result.not_canceled.is_empty() {
-        Ok(format!("Cancelled live order {}", &order_id[..order_id.len().min(12)]))
+        Ok(format!(
+            "Cancelled live order {}",
+            &order_id[..order_id.len().min(12)]
+        ))
     } else {
         let reasons: Vec<String> = result
             .not_canceled

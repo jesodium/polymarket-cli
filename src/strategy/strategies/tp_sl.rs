@@ -203,7 +203,9 @@ mod tests {
         });
         // entry 0.50, mark 0.65 → +30% ≥ +20%.
         let sig = s.on_tick(&ctx(dec!(0.65), dec!(0.50), dec!(100)));
-        assert!(matches!(sig.as_slice(), [Signal::MarketSell { shares, .. }] if *shares == dec!(100)));
+        assert!(
+            matches!(sig.as_slice(), [Signal::MarketSell { shares, .. }] if *shares == dec!(100))
+        );
     }
 
     #[test]
@@ -240,8 +242,14 @@ mod tests {
             sell_fraction: 1.0,
         });
         // Climb to a peak well above entry; trail arms.
-        assert!(s.on_tick(&ctx(dec!(0.60), dec!(0.50), dec!(100))).is_empty());
-        assert!(s.on_tick(&ctx(dec!(0.80), dec!(0.50), dec!(100))).is_empty());
+        assert!(
+            s.on_tick(&ctx(dec!(0.60), dec!(0.50), dec!(100)))
+                .is_empty()
+        );
+        assert!(
+            s.on_tick(&ctx(dec!(0.80), dec!(0.50), dec!(100)))
+                .is_empty()
+        );
         // Drop from peak 0.80 to 0.70 = -12.5% ≥ 10% trail.
         let sig = s.on_tick(&ctx(dec!(0.70), dec!(0.50), dec!(100)));
         assert!(matches!(sig.as_slice(), [Signal::MarketSell { .. }]));
@@ -256,7 +264,9 @@ mod tests {
             sell_fraction: 0.5,
         });
         let sig = s.on_tick(&ctx(dec!(0.60), dec!(0.50), dec!(100)));
-        assert!(matches!(sig.as_slice(), [Signal::MarketSell { shares, .. }] if *shares == dec!(50)));
+        assert!(
+            matches!(sig.as_slice(), [Signal::MarketSell { shares, .. }] if *shares == dec!(50))
+        );
     }
 
     #[test]

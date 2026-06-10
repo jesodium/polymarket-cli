@@ -108,11 +108,7 @@ impl Default for Settings {
                 Decimal::from(50),
                 Decimal::from(100),
             ],
-            quicksell_presets: vec![
-                Decimal::from(25),
-                Decimal::from(50),
-                Decimal::from(100),
-            ],
+            quicksell_presets: vec![Decimal::from(25), Decimal::from(50), Decimal::from(100)],
             slippage_pct: Decimal::from(2),
             default_take_profit_pct: None,
             default_stop_loss_pct: None,
@@ -198,8 +194,7 @@ pub(crate) fn fmt_money_list(values: &[Decimal]) -> String {
 pub(crate) fn parse_number_list(s: &str) -> Result<Vec<Decimal>> {
     let mut out = Vec::new();
     for part in s.split([',', ' ']).map(str::trim).filter(|p| !p.is_empty()) {
-        let v = Decimal::from_str(part)
-            .map_err(|_| anyhow::anyhow!("'{part}' is not a number"))?;
+        let v = Decimal::from_str(part).map_err(|_| anyhow::anyhow!("'{part}' is not a number"))?;
         if v <= Decimal::ZERO {
             anyhow::bail!("values must be positive (got {part})");
         }
@@ -245,7 +240,10 @@ mod tests {
 
     #[test]
     fn parses_number_lists() {
-        assert_eq!(parse_number_list("10, 25, 50").unwrap(), vec![dec!(10), dec!(25), dec!(50)]);
+        assert_eq!(
+            parse_number_list("10, 25, 50").unwrap(),
+            vec![dec!(10), dec!(25), dec!(50)]
+        );
         assert_eq!(parse_number_list("5 15").unwrap(), vec![dec!(5), dec!(15)]);
         assert!(parse_number_list("").is_err());
         assert!(parse_number_list("-1").is_err());

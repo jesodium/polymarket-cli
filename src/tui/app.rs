@@ -245,7 +245,11 @@ impl App {
         } else {
             "PAPER mode — simulated. Press ? for help.".to_string()
         };
-        let wallet = if live { super::live::wallet_info() } else { None };
+        let wallet = if live {
+            super::live::wallet_info()
+        } else {
+            None
+        };
         Self {
             view: View::Dashboard,
             should_quit: false,
@@ -661,7 +665,8 @@ impl App {
         let result: Result<(), String> = (|| {
             match field {
                 SettingField::Threshold => {
-                    let v = Decimal::from_str(&raw).map_err(|_| "Enter a dollar amount.".to_string())?;
+                    let v = Decimal::from_str(&raw)
+                        .map_err(|_| "Enter a dollar amount.".to_string())?;
                     if v < Decimal::ZERO {
                         return Err("Threshold cannot be negative.".into());
                     }
@@ -1045,7 +1050,10 @@ impl App {
         let id = format!("exit-{}", &token_id[..token_id.len().min(6)]);
         // One guard per token: drop any existing one, then attach fresh.
         let _ = self.engine.remove(&id);
-        match self.engine.add_with_params(&id, "tp_sl", vec![token_id], params) {
+        match self
+            .engine
+            .add_with_params(&id, "tp_sl", vec![token_id], params)
+        {
             Ok(()) => {
                 let _ = self.engine.start(&id);
                 let mut bits = Vec::new();
