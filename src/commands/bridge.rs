@@ -61,3 +61,36 @@ pub async fn execute(
 
     Ok(())
 }
+
+/// TUI-friendly deposit address lookup — returns the EVM deposit address string.
+pub(crate) async fn tui_deposit_address() -> Result<String> {
+    let client = bridge::Client::default();
+    let address = {
+        let signer = crate::auth::resolve_signer(None)?;
+        polymarket_client_sdk_v2::auth::Signer::address(&signer)
+    };
+    let request = DepositRequest::builder().address(address).build();
+    let response = client.deposit(&request).await?;
+    Ok(format!("Deposit USDC.e to: {} (EVM)", response.address.evm))
+}
+
+/// TUI-friendly deposit status check — returns a one-line summary.
+pub(crate) async fn tui_deposit_status() -> Result<String> {
+    let client = bridge::Client::default();
+    let address = {
+        let signer = crate::auth::resolve_signer(None)?;
+        polymarket_client_sdk_v2::auth::Signer::address(&signer)
+    };
+    let request = StatusRequest::builder().address(&address.to_string()).build();
+    let response = client.status(&request).await?;
+    let pending: Vec<_> = response
+        .transactions
+        .iter()
+        .filter(|t| !matches!(t.status, polymarket_client_sdk_v2::bridge::types::DepositTransactionStatus::Completed))
+        .collect();
+    if pending.is_empty() {
+        Ok("No pending deposits.".into())
+    } else {
+        Ok(format!("{} pending deposit(s). Run `polymarket bridge status {}` for details.", pending.len(), address))
+    }
+}

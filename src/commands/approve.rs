@@ -250,3 +250,77 @@ async fn set(
 
     Ok(())
 }
+
+/// TUI-friendly approval check — returns a one-line summary of approvals.
+pub(crate) async fn tui_check_approvals() -> Result<String> {
+    let owner: Address = if proxy::is_proxy_mode(None)? {
+        proxy::derive_proxy_address(None)?
+    } else {
+        let signer = auth::resolve_signer(None)?;
+        polymarket_client_sdk_v2::auth::Signer::address(&signer)
+    };
+
+    let provider = auth::create_readonly_provider().await?;
+    let collateral = IERC20::new(super::COLLATERAL_ADDRESS, provider.clone());
+    let ctf = IERC1155::new(CONDITIONAL_TOKENS, provider.clone());
+
+    let targets = approval_targets()?;
+    let mut approved_count = 0;
+    let mut total = 0;
+
+    for target in &targets {
+        if target.needs_collateral_allowance {
+            total += 1;
+            if let Ok(val) = collateral.allowance(owner, target.address).call().await {
+                if val > U256::ZERO {
+                    approved_count += 1;
+                }
+            }
+        }
+        if target.needs_ctf_operator {
+            total += 1;
+            if let Ok(val) = ctf.isApprovedForAll(owner, target.address).call().await {
+                if val {
+                    approved_count += 1;
+                }
+            }
+        }
+    }
+
+    Ok(format!("Approvals: {approved_count}/{total} contracts approved for {owner}"))
+}
+
+/// TUI-friendly approval set — runs all approvals, returns a one-line summary.
+pub(crate) async fn tui_set_approvals() -> Result<String> {
+    let use_proxy = proxy::is_proxy_mode(None)?;
+    let targets = approval_targets()?;
+    let mut tx_count = 0usize;
+
+    for target in &targets {
+        if target.needs_collateral_allowance {
+            let calldata = IERC20::approveCall {
+                spender: target.address,
+                value: U256::MAX,
+            }
+            .abi_encode();
+            proxy::send_call(None, use_proxy, super::COLLATERAL_ADDRESS, calldata)
+                .await
+                .context(format!("Failed pUSD approval for {}", target.name))?;
+            tx_count += 1;
+        }
+
+        if target.needs_ctf_operator {
+            let calldata = IERC1155::setApprovalForAllCall {
+                operator: target.address,
+                approved: true,
+            }
+            .abi_encode();
+            proxy::send_call(None, use_proxy, CONDITIONAL_TOKENS, calldata)
+                .await
+                .context(format!("Failed CTF approval for {}", target.name))?;
+            tx_count += 1;
+        }
+    }
+
+    Ok(format!("✓ {tx_count} approval txns sent — all contracts approved."))
+}

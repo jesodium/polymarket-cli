@@ -5,10 +5,13 @@ use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use polymarket_client_sdk_v2::auth::{LocalSigner, Signer as _};
 use polymarket_client_sdk_v2::types::Decimal;
+use polymarket_client_sdk_v2::{POLYGON, derive_proxy_wallet};
 
 use super::data::{MarketRow, Shared};
 use super::live::{LiveOrder, WalletInfo};
+use crate::config;
 use crate::copytrade::config::CopyTrader;
 use crate::copytrade::engine::CopyEngine;
 use crate::paper::engine as paper_engine;
@@ -21,6 +24,7 @@ use crate::settings::{self, Settings};
 /// The screens of the terminal, in tab order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum View {
+    Onboarding,
     Dashboard,
     Markets,
     MarketDetail,
@@ -50,6 +54,7 @@ impl View {
 
     pub fn title(self) -> &'static str {
         match self {
+            View::Onboarding => "Onboarding",
             View::Dashboard => "Dashboard",
             View::Markets => "Markets",
             View::MarketDetail => "Market",
@@ -269,6 +274,34 @@ impl CopyModal {
     }
 }
 
+/// Onboarding flow step when live mode starts without a wallet.
+pub(crate) struct OnboardingState {
+    pub step: OnboardingStep,
+    /// Text input for importing an existing private key.
+    pub import_key: String,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum OnboardingStep {
+    Welcome,
+    ImportKey,
+}
+
+/// Modal for wallet management actions in the Settings tab.
+pub(crate) struct WalletActionModal {
+    pub action: WalletAction,
+    /// Private key text buffer (import only).
+    pub import_key: String,
+    pub error: Option<String>,
+    pub confirmed: bool,
+}
+
+pub(crate) enum WalletAction {
+    Create,
+    Import,
+}
+
 pub(crate) struct App {
     pub view: View,
     pub should_quit: bool,
@@ -306,6 +339,10 @@ pub(crate) struct App {
     pub copy_modal: Option<CopyModal>,
     /// Paper-account reset form (Settings tab → `r`).
     pub reset_modal: Option<ResetModal>,
+    /// Onboarding flow when no wallet is configured in live mode.
+    pub onboarding: Option<OnboardingState>,
+    /// Create/import wallet modal from the Settings tab.
+    pub wallet_action_modal: Option<WalletActionModal>,
     pub status: String,
     /// True in LIVE mode (real wallet + CLOB), false for the paper account.
     pub live: bool,
@@ -328,8 +365,18 @@ impl App {
         } else {
             None
         };
+        let needs_onboarding = live && wallet.is_none();
+        let onboarding = if needs_onboarding {
+            Some(OnboardingState {
+                step: OnboardingStep::Welcome,
+                import_key: String::new(),
+                error: None,
+            })
+        } else {
+            None
+        };
         Self {
-            view: View::Dashboard,
+            view: if needs_onboarding { View::Onboarding } else { View::Dashboard },
             should_quit: false,
             data,
             account,
@@ -352,6 +399,8 @@ impl App {
             modal: None,
             copy_modal: None,
             reset_modal: None,
+            onboarding,
+            wallet_action_modal: None,
             status,
             live,
         }
@@ -448,7 +497,17 @@ impl App {
             self.should_quit = true;
             return;
         }
-        // Modals capture all input first.
+        // Onboarding captures all input first.
+        if self.onboarding.is_some() {
+            self.onboarding_key(key);
+            return;
+        }
+        // Wallet action modal captures input.
+        if self.wallet_action_modal.is_some() {
+            self.wallet_action_modal_key(key);
+            return;
+        }
+        // Order/copy/reset/settings modals capture all input.
         if self.modal.is_some() {
             self.modal_key(key);
             return;
@@ -564,6 +623,71 @@ impl App {
                 } else {
                     self.status = "No wallet configured (paper mode).".into();
                 }
+            }
+            // Settings: open wallet profile in browser.
+            KeyCode::Char('o') if self.view == View::Settings && self.live => {
+                if let Some(w) = &self.wallet {
+                    let url = format!("https://polymarket.com/profile/{}", w.eoa);
+                    match webbrowser::open(&url) {
+                        Ok(()) => self.status = format!("Opened {url} in browser."),
+                        Err(e) => self.status = format!("Failed to open browser: {e}"),
+                    }
+                }
+            }
+            // Settings: approve contracts, check approvals, deposit info.
+            KeyCode::Char('a') if self.view == View::Settings && self.live => {
+                self.status = "Approving all contracts (sending up to 12 on-chain txns)…".into();
+                let shared = Arc::clone(&self.data);
+                tokio::spawn(async move {
+                    let msg = match crate::commands::approve::tui_set_approvals().await {
+                        Ok(s) => s,
+                        Err(e) => format!("Approve failed: {e}"),
+                    };
+                    shared.lock().unwrap().notices.push(msg);
+                });
+            }
+            KeyCode::Char('c') if self.view == View::Settings && self.live => {
+                let shared = Arc::clone(&self.data);
+                tokio::spawn(async move {
+                    let msg = match crate::commands::approve::tui_check_approvals().await {
+                        Ok(s) => s,
+                        Err(e) => format!("Check approvals failed: {e}"),
+                    };
+                    shared.lock().unwrap().notices.push(msg);
+                });
+                self.status = "Checking approvals…".into();
+            }
+            KeyCode::Char('d') if self.view == View::Settings && self.live => {
+                let shared = Arc::clone(&self.data);
+                tokio::spawn(async move {
+                    let msg = match crate::commands::bridge::tui_deposit_address().await {
+                        Ok(s) => s,
+                        Err(e) => format!("Deposit address lookup failed: {e}"),
+                    };
+                    shared.lock().unwrap().notices.push(msg);
+                });
+                self.status = "Fetching deposit address…".into();
+            }
+            // Settings: create/import wallet (live mode).
+            KeyCode::Char('n') if self.view == View::Settings && self.live => {
+                if self.wallet.is_some() {
+                    self.wallet_action_modal = Some(WalletActionModal {
+                        action: WalletAction::Create,
+                        import_key: String::new(),
+                        error: None,
+                        confirmed: false,
+                    });
+                } else {
+                    self.execute_create_wallet();
+                }
+            }
+            KeyCode::Char('m') if self.view == View::Settings && self.live => {
+                self.wallet_action_modal = Some(WalletActionModal {
+                    action: WalletAction::Import,
+                    import_key: String::new(),
+                    error: None,
+                    confirmed: false,
+                });
             }
             // Settings: reset the paper account.
             KeyCode::Char('r') if self.view == View::Settings => {
@@ -1199,7 +1323,7 @@ impl App {
         tokio::spawn(async move {
             let msg = match super::live::place(order).await {
                 Ok(s) => s,
-                Err(e) => format!("Live order FAILED: {e}"),
+                Err(e) => friendly_live_order_error(e),
             };
             shared.lock().unwrap().notices.push(msg);
         });
@@ -1489,6 +1613,205 @@ impl App {
             Ok(()) => format!("{} {}", act.verb(), id),
             Err(e) => e.to_string(),
         };
+    }
+}
+
+// --- Onboarding ----------------------------------------------------------
+
+impl App {
+    fn onboarding_key(&mut self, key: KeyEvent) {
+        let step = self.onboarding.as_ref().map(|s| s.step);
+        let Some(step) = step else { return };
+        match step {
+            OnboardingStep::Welcome => match key.code {
+                KeyCode::Char('c') => {
+                    self.execute_create_wallet();
+                }
+                KeyCode::Char('i') => {
+                    if let Some(s) = self.onboarding.as_mut() {
+                        s.step = OnboardingStep::ImportKey;
+                        s.import_key.clear();
+                        s.error = None;
+                    }
+                }
+                KeyCode::Esc => {
+                    self.onboarding = None;
+                    self.view = View::Dashboard;
+                    self.status = "No wallet configured — browsing markets only. Press Tab/9 for Settings to set up a wallet.".to_string();
+                }
+                _ => {}
+            },
+            OnboardingStep::ImportKey => {
+                // Collect the key text first to avoid borrow conflicts.
+                let key_text = self.onboarding.as_ref().map(|s| s.import_key.clone());
+                match key.code {
+                    KeyCode::Esc => {
+                        if let Some(s) = self.onboarding.as_mut() {
+                            s.step = OnboardingStep::Welcome;
+                            s.import_key.clear();
+                            s.error = None;
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        if let Some(s) = self.onboarding.as_mut() {
+                            s.import_key.pop();
+                        }
+                    }
+                    KeyCode::Char(c) => {
+                        if let Some(s) = self.onboarding.as_mut() {
+                            s.import_key.push(c);
+                        }
+                    }
+                    KeyCode::Enter => {
+                        let key = key_text.unwrap_or_default();
+                        self.execute_import_wallet(&key);
+                    }
+                    _ => {}
+                }
+            },
+        }
+    }
+
+    fn execute_create_wallet(&mut self) {
+        let signer = LocalSigner::random().with_chain_id(Some(POLYGON));
+        let address = signer.address();
+        let key_hex = format!("{:#x}", signer.to_bytes());
+        if let Err(e) = config::save_wallet(&key_hex, POLYGON, config::DEFAULT_SIGNATURE_TYPE) {
+            self.set_onboarding_error(format!("Failed to save wallet: {e}"));
+            return;
+        }
+        let sig_type = config::resolve_signature_type(None).unwrap_or_else(|_| config::DEFAULT_SIGNATURE_TYPE.to_string());
+        let proxy = derive_proxy_wallet(address, POLYGON).map(|a| a.to_string());
+        self.wallet = Some(WalletInfo {
+            eoa: address.to_string(),
+            proxy: proxy.clone(),
+            trading: if sig_type == "proxy" {
+                proxy.unwrap_or_else(|| address.to_string())
+            } else {
+                address.to_string()
+            },
+            signature_type: sig_type,
+            private_key: Some(key_hex),
+            config_path: config::config_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+        });
+        self.live = true;
+        self.onboarding = None;
+        self.view = View::Dashboard;
+        self.status = format!(
+            "✓ Wallet created: {address}. The terminal now shows live state. Press Tab/9 for Settings.",
+        );
+    }
+
+    fn execute_import_wallet(&mut self, key: &str) {
+        let key = key.trim();
+        let signer = match LocalSigner::from_str(key) {
+            Ok(s) => s.with_chain_id(Some(POLYGON)),
+            Err(_) => {
+                self.set_onboarding_error("Invalid private key. Enter a valid hex key.".to_string());
+                return;
+            }
+        };
+        let address = signer.address();
+        let key_hex = format!("{:#x}", signer.to_bytes());
+        if let Err(e) = config::save_wallet(&key_hex, POLYGON, config::DEFAULT_SIGNATURE_TYPE) {
+            self.set_onboarding_error(format!("Failed to save wallet: {e}"));
+            return;
+        }
+        let sig_type = config::resolve_signature_type(None).unwrap_or_else(|_| config::DEFAULT_SIGNATURE_TYPE.to_string());
+        let proxy = derive_proxy_wallet(address, POLYGON).map(|a| a.to_string());
+        self.wallet = Some(WalletInfo {
+            eoa: address.to_string(),
+            proxy: proxy.clone(),
+            trading: if sig_type == "proxy" {
+                proxy.unwrap_or_else(|| address.to_string())
+            } else {
+                address.to_string()
+            },
+            signature_type: sig_type,
+            private_key: Some(key_hex),
+            config_path: config::config_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+        });
+        self.live = true;
+        self.onboarding = None;
+        self.view = View::Dashboard;
+        self.status = format!(
+            "✓ Wallet imported: {address}. The terminal now shows live state.",
+        );
+    }
+
+    fn set_onboarding_error(&mut self, msg: String) {
+        if let Some(s) = self.onboarding.as_mut() {
+            s.error = Some(msg);
+        }
+    }
+}
+
+// --- Wallet action modal (Settings tab) ---------------------------------
+
+impl App {
+    fn wallet_action_modal_key(&mut self, key: KeyEvent) {
+        let Some(m) = self.wallet_action_modal.as_mut() else { return };
+        match m.action {
+            WalletAction::Create => match key.code {
+                KeyCode::Esc => {
+                    self.wallet_action_modal = None;
+                }
+                KeyCode::Enter if m.confirmed => {
+                    self.execute_create_wallet();
+                    self.wallet_action_modal = None;
+                }
+                KeyCode::Enter => {
+                    m.confirmed = true;
+                }
+                _ => {}
+            },
+            WalletAction::Import => match key.code {
+                KeyCode::Esc => {
+                    self.wallet_action_modal = None;
+                }
+                KeyCode::Backspace => {
+                    m.import_key.pop();
+                }
+                KeyCode::Char(c) => {
+                    m.import_key.push(c);
+                }
+                KeyCode::Enter => {
+                    let key = m.import_key.trim().to_string();
+                    if key.is_empty() {
+                        m.error = Some("Enter a private key.".to_string());
+                        return;
+                    }
+                    self.execute_import_wallet(&key);
+                    self.wallet_action_modal = None;
+                }
+                _ => {}
+            },
+        }
+    }
+}
+
+/// Translate common CLOB errors into actionable advice for the user.
+fn friendly_live_order_error(e: anyhow::Error) -> String {
+    let msg = e.to_string();
+    if msg.contains("maker address not allowed") || msg.contains("deposit wallet flow") {
+        let brief = msg.split('{').next().unwrap_or(&msg).trim();
+        format!(
+            "{brief}. The CLOB doesn't recognize this wallet for trading. Run `polymarket approve set` first, then deposit USDC.e (Polygon) to your proxy wallet from Settings tab."
+        )
+    } else if msg.contains("insufficient balance") {
+        format!(
+            "Live order rejected — not enough USDC.e (buys) or shares (sells) in your wallet. Deposit USDC.e via `polymarket bridge deposit`."
+        )
+    } else if msg.contains("insufficient allowance") {
+        format!(
+            "Live order rejected — contract not approved. Run `polymarket approve set` and try again."
+        )
+    } else {
+        format!("Live order FAILED: {e}")
     }
 }
 

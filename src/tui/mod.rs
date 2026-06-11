@@ -54,18 +54,20 @@ pub(crate) async fn run(paper: bool) -> Result<()> {
         };
         (acct, None)
     } else {
-        // Live: a wallet is required; the account is hydrated from real state.
-        if config::resolve_key(None)?.0.is_none() {
-            anyhow::bail!(
-                "LIVE mode needs a wallet. Run `polymarket wallet create` (or import), or launch with `polymarket tui --paper` for simulated trading."
-            );
-        }
-        let user = live::resolve_user_address()
-            .context("Could not derive wallet address for live mode")?;
+        // Live: wallet may or may not exist. If missing we'll show onboarding.
+        let has_wallet = config::resolve_key(None)?.0.is_some();
+        let user = if has_wallet {
+            Some(
+                live::resolve_user_address()
+                    .context("Could not derive wallet address for live mode")?,
+            )
+        } else {
+            None
+        };
         // Empty shell; the refresher fills in real cash and positions.
         (
             PaperAccount::new(polymarket_client_sdk_v2::types::Decimal::ZERO, false),
-            Some(user),
+            user,
         )
     };
     let account = Arc::new(Mutex::new(account));

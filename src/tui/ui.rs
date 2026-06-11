@@ -12,8 +12,8 @@ use ratatui::widgets::{
 };
 
 use super::app::{
-    App, COPY_FIELDS, CopyField, CopyModal, ModalField, OrderModal, ResetModal, SETTING_ROWS,
-    SettingRow, SettingsEditModal, View,
+    App, COPY_FIELDS, CopyField, CopyModal, ModalField, OnboardingState, OnboardingStep, OrderModal,
+    ResetModal, SETTING_ROWS, SettingRow, SettingsEditModal, View, WalletAction, WalletActionModal,
 };
 use crate::paper::engine;
 use crate::paper::types::{OrderKind, TradeSide};
@@ -44,6 +44,11 @@ fn mode_label(app: &App) -> &'static str {
 }
 
 pub(crate) fn render(f: &mut Frame, app: &App) {
+    // Onboarding takes over the full screen when no wallet is configured.
+    if let Some(o) = &app.onboarding {
+        render_onboarding(f, o);
+        return;
+    }
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -55,6 +60,7 @@ pub(crate) fn render(f: &mut Frame, app: &App) {
 
     render_tabs(f, app, chunks[0]);
     match app.view {
+        View::Onboarding => {} // handled by early return above
         View::Dashboard => dashboard(f, app, chunks[1]),
         View::Markets => markets(f, app, chunks[1]),
         View::MarketDetail => market_detail(f, app, chunks[1]),
@@ -79,6 +85,9 @@ pub(crate) fn render(f: &mut Frame, app: &App) {
     }
     if let Some(sem) = &app.settings_modal {
         render_settings_modal(f, sem);
+    }
+    if let Some(wam) = &app.wallet_action_modal {
+        render_wallet_action_modal(f, wam);
     }
 }
 
@@ -137,7 +146,7 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
             "n follow · s start · x stop · e enable · d disable · D unfollow · ↑↓ move"
         }
         View::Settings => {
-            "↑↓ move · Enter edit/cycle · w reveal key · r reset paper account · Tab views"
+            "↑↓ move · Enter edit/cycle · w reveal key · n create · m import · o browser · a approve · c check · d deposit · r reset paper · Tab views"
         }
         _ => "Tab/1-9 switch views · ↑↓ move · ? help · q or Ctrl+C quit",
     };
@@ -995,6 +1004,31 @@ fn render_wallet_panel(f: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(DIM),
                 )));
             }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "n — Create new wallet",
+                Style::default().fg(GOLD),
+            )));
+            lines.push(Line::from(Span::styled(
+                "m — Import wallet",
+                Style::default().fg(GOLD),
+            )));
+            lines.push(Line::from(Span::styled(
+                "o — Open profile in browser",
+                Style::default().fg(ACCENT),
+            )));
+            lines.push(Line::from(Span::styled(
+                "a — Approve all contracts",
+                Style::default().fg(GOOD),
+            )));
+            lines.push(Line::from(Span::styled(
+                "c — Check approval status",
+                Style::default().fg(DIM),
+            )));
+            lines.push(Line::from(Span::styled(
+                "d — Show bridge deposit address",
+                Style::default().fg(DIM),
+            )));
         }
         None => {
             let acct = app.account.lock().unwrap();
@@ -1008,10 +1042,25 @@ fn render_wallet_panel(f: &mut Frame, app: &App, area: Rect) {
                 "Press r to reset the paper account.",
                 Style::default().fg(GOLD),
             )));
-            lines.push(Line::from(
-                "Run `polymarket wallet create` then relaunch without --paper for live mode."
-                    .fg(DIM),
-            ));
+            if app.live {
+                lines.push(Line::from(Span::styled(
+                    "No wallet configured.",
+                    Style::default().fg(DIM),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "n — Create new wallet",
+                    Style::default().fg(GOLD),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "m — Import wallet",
+                    Style::default().fg(GOLD),
+                )));
+            } else {
+                lines.push(Line::from(
+                    "Run `polymarket wallet create` then relaunch without --paper for live mode."
+                        .fg(DIM),
+                ));
+            }
         }
     }
     let title = if app.live {
@@ -1061,6 +1110,116 @@ fn render_session_panel(f: &mut Frame, app: &App, area: Rect) {
             .wrap(Wrap { trim: true }),
         area,
     );
+}
+
+// --- Onboarding ------------------------------------------------------------
+
+fn render_onboarding(f: &mut Frame, state: &OnboardingState) {
+    let area = f.area();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(" POLYMARKET LIVE TRADING ", Style::default().fg(ACCENT).bold()));
+    let inner = block.inner(area);
+    f.render_widget(Clear, area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(6),
+            Constraint::Length(3),
+            Constraint::Min(8),
+        ])
+        .split(inner);
+
+    let welcome = vec![
+        Line::from("Welcome to Polymarket CLI".bold()),
+        Line::from(""),
+        Line::from("No wallet configured — set one up to trade live.".fg(DIM)),
+    ];
+    f.render_widget(Paragraph::new(welcome).alignment(Alignment::Center), chunks[0]);
+
+    match state.step {
+        OnboardingStep::Welcome => {
+            let options = vec![
+                Line::from(""),
+                Line::from(Span::styled("  [c]  Create a new wallet    ", Style::default().fg(GOOD).bold())),
+                Line::from(Span::styled("  [i]  Import existing key    ", Style::default().fg(ACCENT).bold())),
+                Line::from(""),
+                Line::from(Span::styled("  [Esc]  Skip — browse markets only", Style::default().fg(DIM))),
+                Line::from(""),
+            ];
+            f.render_widget(Paragraph::new(options).alignment(Alignment::Center), chunks[1]);
+
+            let tip = vec![
+                Line::from("You can also press Tab/9 to reach Settings and set up a wallet later.".fg(DIM)),
+            ];
+            f.render_widget(Paragraph::new(tip).alignment(Alignment::Center), chunks[2]);
+        }
+        OnboardingStep::ImportKey => {
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(Span::styled("  Paste your private key (hex, with or without 0x prefix):", Style::default().fg(DIM))),
+                Line::from(""),
+                Line::from(format!("  {}█", state.import_key)),
+                Line::from(""),
+            ];
+            if let Some(e) = &state.error {
+                lines.push(Line::from(Span::styled(format!("  ✗ {e}"), Style::default().fg(BAD))));
+                lines.push(Line::from(""));
+            }
+            lines.push(Line::from("  Enter to import · Esc to go back".fg(DIM)));
+            f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), chunks[1]);
+        }
+    }
+}
+
+// --- Wallet action modal (Settings tab) ----------------------------------
+
+fn render_wallet_action_modal(f: &mut Frame, m: &WalletActionModal) {
+    let area = centered_rect(56, 14, f.area());
+    f.render_widget(Clear, area);
+    match m.action {
+        WalletAction::Create => {
+            let mut lines = vec![
+                Line::from("Create new wallet".bold()),
+                Line::from(""),
+            ];
+            if m.confirmed {
+                lines.push(Line::from("Generating wallet…".fg(DIM)));
+            } else {
+                lines.push(Line::from("This will REPLACE your current wallet.".fg(BAD)));
+                lines.push(Line::from("Make sure you have backed up your existing key.".fg(DIM)));
+                lines.push(Line::from(""));
+                lines.push(Line::from("Press Enter to confirm · Esc to cancel".fg(DIM)));
+            }
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" NEW WALLET ".bold())
+                .border_style(Style::default().fg(GOLD));
+            f.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: true }), area);
+        }
+        WalletAction::Import => {
+            let mut lines = vec![
+                Line::from("Import wallet".bold()),
+                Line::from(""),
+                Line::from(Span::styled("Private key:", Style::default().fg(DIM))),
+                Line::from(format!("{}█", m.import_key)),
+                Line::from(""),
+            ];
+            if let Some(e) = &m.error {
+                lines.push(Line::from(Span::styled(e.clone(), Style::default().fg(BAD))));
+                lines.push(Line::from(""));
+            }
+            lines.push(Line::from("Enter to import · Esc to cancel".fg(DIM)));
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" IMPORT WALLET ".bold())
+                .border_style(Style::default().fg(ACCENT));
+            f.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: true }), area);
+        }
+    }
 }
 
 // --- Modal -----------------------------------------------------------------
