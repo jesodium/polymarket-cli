@@ -2008,7 +2008,8 @@ fn friendly_live_order_error(e: anyhow::Error) -> String {
     } else if msg.contains("insufficient balance") {
         "Live order rejected — not enough USDC.e (buys) or shares (sells) in your wallet. Deposit USDC.e via `polymarket bridge deposit`.".to_string()
     } else if msg.contains("insufficient allowance") {
-        "Live order rejected — contract not approved. Run `polymarket approve set` and try again.".to_string()
+        "Live order rejected — contract not approved. Run `polymarket approve set` and try again."
+            .to_string()
     } else {
         format!("Live order FAILED: {e}")
     }
