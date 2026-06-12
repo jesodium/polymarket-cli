@@ -3,7 +3,7 @@
 //! The PolyGun "Copy Trade" workflow, headless: add a wallet with your sizing
 //! and filters, enable it, and `run` the poller. Orders route to the paper
 //! account by default (or the live CLOB with `--live`), sharing the exact
-//! execution path the manual trader and strategy engine use.
+//! execution path the manual trader uses.
 
 use std::sync::{Arc, Mutex};
 

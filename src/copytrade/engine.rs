@@ -3,8 +3,8 @@
 //! For each followed wallet it polls the Data API for recent **trade**
 //! activity, decides whether to mirror each new trade (price-band and holdings
 //! filters, fixed copy size capped by a per-trade ceiling), and routes the
-//! resulting order through the same paper/live execution path the strategy
-//! engine uses.
+//! resulting order through the same paper/live execution path the manual
+//! trader uses.
 //!
 //! The decision half ([`decide`]) is pure and unit-tested; the polling and
 //! execution half does the I/O and keeps the locking discipline in one place.

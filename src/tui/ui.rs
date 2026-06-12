@@ -1459,7 +1459,9 @@ fn render_reset_modal(f: &mut Frame, m: &ResetModal) {
         Line::from(""),
         match &m.error {
             Some(e) => Line::from(Span::styled(e.clone(), Style::default().fg(BAD))),
-            None => Line::from("Strategies are kept; only the account is reset.".fg(DIM)),
+            None => {
+                Line::from("Guards and copy-trades are kept; only the account is reset.".fg(DIM))
+            }
         },
         Line::from("Enter confirm · Esc cancel".fg(DIM)),
     ];

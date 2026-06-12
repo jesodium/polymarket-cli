@@ -1,7 +1,7 @@
 //! Live account glue for the TUI: derive the wallet address and read its real
 //! balance + positions so the terminal's views show actual on-chain state when
 //! running without `--paper`. Order placement itself lives in [`crate::trade`]
-//! (shared with the strategy engine).
+//! (shared with the copy-trade engine).
 
 use anyhow::{Context, Result};
 use polymarket_client_sdk_v2::auth::LocalSigner;

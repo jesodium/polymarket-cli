@@ -1,5 +1,5 @@
 //! Live order placement — one entry point used by both the TUI order modal
-//! and the autonomous strategy engine.
+//! and the copy-trade engine.
 //!
 //! This is exactly the path the `clob create-order` / `clob market-order`
 //! commands use: resolve the signer, authenticate, build, sign, and
