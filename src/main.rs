@@ -102,7 +102,10 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    if !is_tui && !is_upgrade && let Some(tag) = updater::check_update() {
+    if !is_tui
+        && !is_upgrade
+        && let Some(tag) = updater::check_update()
+    {
         eprintln!("\nUpdate {tag} available — run `polymarket upgrade` to install.");
     }
 
