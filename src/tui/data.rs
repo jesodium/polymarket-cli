@@ -370,8 +370,13 @@ async fn fetch_resolutions(
         .filter_map(|t| quotes::parse_token_id(t).ok())
         .collect();
     for chunk in parsed.chunks(20) {
+        // Gamma omits closed markets by default — but a resolved market *is*
+        // closed, so without this filter we'd never see the very markets we're
+        // checking for resolution. `closed=true` returns the settled ones and
+        // drops the still-open holdings (which aren't resolved anyway).
         let request = gamma::types::request::MarketsRequest::builder()
             .clob_token_ids(chunk.to_vec())
+            .closed(true)
             .limit(chunk.len() as i32)
             .build();
         for m in client.markets(&request).await? {

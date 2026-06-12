@@ -1000,11 +1000,30 @@ impl App {
         self.open_modal_with(p.token_id, p.question, p.outcome, side);
     }
 
-    /// The position under the Positions-tab cursor. Rows render in
-    /// `portfolio_view` order, i.e. the account's BTreeMap order.
+    /// The position under the Positions-tab cursor. Rows render open positions
+    /// first, then resolved (redeemable) ones, each in the account's BTreeMap
+    /// order — this walks that same order so the cursor lines up with the table.
     fn selected_position(&self) -> Option<Position> {
+        let resolved: std::collections::HashSet<String> = self
+            .data
+            .lock()
+            .unwrap()
+            .resolutions
+            .keys()
+            .cloned()
+            .collect();
         let acct = self.account.lock().unwrap();
-        acct.positions.values().nth(self.positions_sel).cloned()
+        let mut ordered: Vec<&Position> = acct
+            .positions
+            .values()
+            .filter(|p| !resolved.contains(&p.token_id))
+            .collect();
+        ordered.extend(
+            acct.positions
+                .values()
+                .filter(|p| resolved.contains(&p.token_id)),
+        );
+        ordered.get(self.positions_sel).map(|p| (*p).clone())
     }
 
     fn open_modal_with(

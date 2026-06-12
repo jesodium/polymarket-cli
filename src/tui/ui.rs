@@ -16,8 +16,9 @@ use super::app::{
     OrderModal, ResetModal, SETTING_ROWS, SettingRow, SettingsEditModal, View, WalletAction,
     WalletActionModal,
 };
+use super::data::ResolutionInfo;
 use crate::paper::engine;
-use crate::paper::types::{OrderKind, TradeSide};
+use crate::paper::types::{OrderKind, PositionView, TradeSide};
 
 const ACCENT: Color = Color::Cyan;
 const GOOD: Color = Color::Rgb(63, 185, 80); // green
@@ -545,54 +546,46 @@ fn positions(f: &mut Frame, app: &App, area: Rect) {
     let acct = app.account.lock().unwrap();
     let view = engine::portfolio_view(&acct, &marks);
     drop(acct);
-    let rows: Vec<Row> = view
+
+    // Open positions render first; resolved ones drop into a -REDEEMABLE-
+    // section at the bottom. The cursor (App::selected_position) walks this
+    // same order, so keep the two in lockstep.
+    let (open, resolved): (Vec<&PositionView>, Vec<&PositionView>) = view
         .positions
         .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            let upnl = p.unrealized_pnl.unwrap_or_default();
-            let mark_cell = match resolutions.get(&p.position.token_id) {
-                Some(r) if r.won => Cell::from("WON $1.00").style(Style::default().fg(GOOD).bold()),
-                Some(_) => Cell::from("LOST $0.00").style(Style::default().fg(BAD).bold()),
-                None => Cell::from(p.mark_price.map(price_pct).unwrap_or_else(|| "—".into())),
-            };
-            let roi_cell = match p.roi() {
-                Some(r) => Cell::from(format!("{:+.1}%", r * Decimal::ONE_HUNDRED))
-                    .style(Style::default().fg(pnl_color(r))),
-                None => Cell::from("—"),
-            };
-            Row::new(vec![
-                Cell::from(truncate(&p.position.question, 36)),
-                Cell::from(truncate(&p.position.outcome, 8)),
-                Cell::from(format!(
-                    "{} ({})",
-                    p.position.size.round_dp(1),
-                    p.market_value.map(money).unwrap_or_else(|| "—".into())
-                )),
-                Cell::from(price_pct(p.position.avg_price)),
-                mark_cell,
-                Cell::from(signed_money(upnl)).style(Style::default().fg(pnl_color(upnl))),
-                roi_cell,
-            ])
-            .style(zebra(i))
-        })
-        .collect();
+        .partition(|p| !resolutions.contains_key(&p.position.token_id));
+
+    let mut rows: Vec<Row> = Vec::with_capacity(view.positions.len() + 1);
+    let mut zi = 0usize; // zebra index, continuous across the real rows
+    for p in &open {
+        rows.push(open_position_row(p, zi));
+        zi += 1;
+    }
+    if !resolved.is_empty() {
+        rows.push(redeemable_header_row());
+        for p in &resolved {
+            let info = &resolutions[&p.position.token_id];
+            rows.push(redeemable_row(p, info, zi));
+            zi += 1;
+        }
+    }
+
     let n = view.positions.len();
     let table = Table::new(
         rows,
         [
-            Constraint::Min(20),
-            Constraint::Length(8),
+            Constraint::Min(14),
+            Constraint::Length(5),
             Constraint::Length(17),
-            Constraint::Length(15),
-            Constraint::Length(15),
-            Constraint::Length(10),
-            Constraint::Length(8),
+            Constraint::Length(13),
+            Constraint::Length(13),
+            Constraint::Length(9),
+            Constraint::Length(7),
         ],
     )
     .header(header_row(&[
         "Market",
-        "Outcome",
+        "Out",
         "Shares (value)",
         "Avg (prob)",
         "Mark (prob)",
@@ -604,7 +597,90 @@ fn positions(f: &mut Frame, app: &App, area: Rect) {
     )))
     .row_highlight_style(highlight())
     .highlight_symbol("▶ ");
-    f.render_stateful_widget(table, area, &mut sel_state(app.positions_sel, n));
+
+    // The -REDEEMABLE- header is a real table row, so any cursor landing in
+    // the resolved group sits one row lower than its selection index.
+    let table_len = n + usize::from(!resolved.is_empty());
+    let table_sel = if app.positions_sel >= open.len() {
+        app.positions_sel + 1
+    } else {
+        app.positions_sel
+    };
+    f.render_stateful_widget(table, area, &mut sel_state(table_sel, table_len));
+}
+
+/// A live (unresolved) position row: mark/value/uPnL/ROI from the quote feed.
+fn open_position_row(p: &PositionView, zi: usize) -> Row<'static> {
+    let upnl = p.unrealized_pnl.unwrap_or_default();
+    let roi_cell = match p.roi() {
+        Some(r) => Cell::from(format!("{:+.1}%", r * Decimal::ONE_HUNDRED))
+            .style(Style::default().fg(pnl_color(r))),
+        None => Cell::from("—"),
+    };
+    Row::new(vec![
+        Cell::from(truncate(&p.position.question, 36)),
+        Cell::from(truncate(&p.position.outcome, 8)),
+        Cell::from(format!(
+            "{} ({})",
+            p.position.size.round_dp(1),
+            p.market_value.map(money).unwrap_or_else(|| "—".into())
+        )),
+        Cell::from(price_pct(p.position.avg_price)),
+        Cell::from(p.mark_price.map(price_pct).unwrap_or_else(|| "—".into())),
+        Cell::from(signed_money(upnl)).style(Style::default().fg(pnl_color(upnl))),
+        roi_cell,
+    ])
+    .style(zebra(zi))
+}
+
+/// Section divider between live positions and resolved (redeemable) ones.
+fn redeemable_header_row() -> Row<'static> {
+    let mut cells = vec![Cell::from("── REDEEMABLE ──").style(Style::default().fg(GOLD).bold())];
+    cells.extend(std::iter::repeat_with(|| Cell::from("")).take(6));
+    Row::new(cells).style(Style::default().bg(ZEBRA_BG))
+}
+
+/// A resolved position row. The market settled, so mark/value/uPnL/ROI come
+/// from the payout (1 won, 0 lost) instead of a live quote, and the WON/LOST
+/// verdict leads the Market column.
+fn redeemable_row(p: &PositionView, info: &ResolutionInfo, zi: usize) -> Row<'static> {
+    let size = p.position.size;
+    let entry = if p.position.entry_midpoint > Decimal::ZERO {
+        p.position.entry_midpoint
+    } else {
+        p.position.avg_price
+    };
+    let payout = info.payout;
+    let value = payout * size;
+    let upnl = (payout - entry) * size;
+    let basis = entry * size;
+
+    let (tag, tag_color) = if info.won {
+        ("WON ", GOOD)
+    } else {
+        ("LOST ", BAD)
+    };
+    let market_cell = Cell::from(Line::from(vec![
+        Span::styled(tag, Style::default().fg(tag_color).bold()),
+        Span::raw(truncate(&p.position.question, 30)),
+    ]));
+    let roi_cell = if basis > Decimal::ZERO {
+        let r = upnl / basis;
+        Cell::from(format!("{:+.1}%", r * Decimal::ONE_HUNDRED))
+            .style(Style::default().fg(pnl_color(r)))
+    } else {
+        Cell::from("—")
+    };
+    Row::new(vec![
+        market_cell,
+        Cell::from(truncate(&p.position.outcome, 8)),
+        Cell::from(format!("{} ({})", size.round_dp(1), money(value))),
+        Cell::from(price_pct(p.position.avg_price)),
+        Cell::from(price_pct(payout)),
+        Cell::from(signed_money(upnl)).style(Style::default().fg(pnl_color(upnl))),
+        roi_cell,
+    ])
+    .style(zebra(zi))
 }
 
 // --- Orders ----------------------------------------------------------------
@@ -729,32 +805,62 @@ fn history(f: &mut Frame, app: &App, area: Rect) {
                 Line::from(""),
                 Line::from("View: polymarket clob trades".fg(DIM)),
             ])
-            .block(panel("Trade History · LIVE")),
+            .block(panel("Position History · LIVE")),
             area,
         );
         return;
     }
     let acct = app.account.lock().unwrap();
-    let mut trades: Vec<_> = acct.trades.iter().rev().cloned().collect();
+    // Position history: only closed positions — every sell carries a realized
+    // PnL, whether it closed by resolution (Settlement) or an early sale.
+    let mut closed: Vec<_> = acct
+        .trades
+        .iter()
+        .rev()
+        .filter(|t| t.realized_pnl.is_some())
+        .cloned()
+        .collect();
     drop(acct);
+    let total = closed.len();
+    if total == 0 {
+        f.render_widget(
+            Paragraph::new(
+                "No closed positions yet — resolved or sold positions show here.".fg(DIM),
+            )
+            .block(panel("Position History")),
+            area,
+        );
+        return;
+    }
     let visible = area.height.saturating_sub(3) as usize;
-    let start = app.history_scroll.min(trades.len().saturating_sub(1));
-    trades = trades.into_iter().skip(start).take(visible).collect();
-    let rows: Vec<Row> = trades
+    let start = app.history_scroll.min(total.saturating_sub(1));
+    closed = closed.into_iter().skip(start).take(visible).collect();
+    let rows: Vec<Row> = closed
         .iter()
         .enumerate()
         .map(|(i, t)| {
-            let pnl = t.realized_pnl.map(signed_money).unwrap_or_default();
+            let pnl_val = t.realized_pnl.unwrap_or_default();
+            let (verdict, vcolor) = if pnl_val > Decimal::ZERO {
+                ("WON", GOOD)
+            } else if pnl_val < Decimal::ZERO {
+                ("LOST", BAD)
+            } else {
+                ("FLAT", DIM)
+            };
+            let via = if t.kind == OrderKind::Settlement {
+                "Resolved"
+            } else {
+                "Sold"
+            };
             Row::new(vec![
-                Cell::from(t.timestamp.format("%m-%d %H:%M:%S").to_string()),
-                side_cell(t.side),
-                Cell::from(t.kind.to_string()),
+                Cell::from(t.timestamp.format("%m-%d %H:%M").to_string()),
+                Cell::from(verdict).style(Style::default().fg(vcolor).bold()),
                 Cell::from(truncate(&t.question, 30)),
-                Cell::from(t.size.round_dp(2).to_string()),
-                Cell::from(format!("{:.4}", t.price)),
-                Cell::from(money(t.notional)),
-                Cell::from(pnl)
-                    .style(Style::default().fg(pnl_color(t.realized_pnl.unwrap_or_default()))),
+                Cell::from(truncate(&t.outcome, 6)),
+                Cell::from(t.size.round_dp(1).to_string()),
+                Cell::from(format!("{:.2}", t.price)),
+                Cell::from(signed_money(pnl_val)).style(Style::default().fg(pnl_color(pnl_val))),
+                Cell::from(via).style(Style::default().fg(DIM)),
             ])
             .style(zebra(i))
         })
@@ -762,20 +868,20 @@ fn history(f: &mut Frame, app: &App, area: Rect) {
     let table = Table::new(
         rows,
         [
-            Constraint::Length(15),
-            Constraint::Length(5),
-            Constraint::Length(7),
+            Constraint::Length(11),
+            Constraint::Length(6),
             Constraint::Min(18),
+            Constraint::Length(6),
             Constraint::Length(8),
-            Constraint::Length(8),
+            Constraint::Length(6),
             Constraint::Length(10),
-            Constraint::Length(10),
+            Constraint::Length(9),
         ],
     )
     .header(header_row(&[
-        "Time", "Side", "Type", "Market", "Size", "Price", "Notional", "PnL",
+        "Time", "Result", "Market", "Out", "Size", "Exit", "PnL", "Via",
     ]))
-    .block(panel("Trade History (↑↓ scroll)"));
+    .block(panel(&format!("Position History ({total}) — ↑↓ scroll")));
     f.render_widget(table, area);
 }
 
@@ -1656,9 +1762,11 @@ fn pct(p: Decimal) -> String {
     format!("{:.1}%", p * Decimal::from(100))
 }
 
-/// A price with its implied probability, e.g. `0.2520 (25.2%)`.
+/// A price with its implied probability, e.g. `0.25 (25.2%)`. Kept 2-decimal so
+/// the parens still fit the Positions table's Avg/Mark columns in a normal
+/// terminal width.
 fn price_pct(p: Decimal) -> String {
-    format!("{:.4} ({})", p, pct(p))
+    format!("{:.2} ({})", p, pct(p))
 }
 
 fn status_label(closed: Option<bool>, active: Option<bool>) -> String {
