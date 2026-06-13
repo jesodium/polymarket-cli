@@ -30,6 +30,7 @@
 | 🤖 Local strategy engine | ✅ | Plugins: `momentum`, `mean_reversion`, `tp_sl`, live logs |
 | 🎯 Take-profit / stop-loss | ✅ | Per-position exit guard: TP %, SL %, trailing stop |
 | ⚙️ Trading settings | ✅ | Cautious/Standard/Expert modes, quickbuy/quicksell presets |
+| 🔌 MCP server | ✅ | `polymarket mcp` — 37 tools for AI agents, paper + live |
 | 💸 Live trading | 🚧 | Real CLOB orders wired — **untested with real funds** |
 | 🛡️ Risk caps / kill-switch | ⏳ | Planned before autonomous live is safe |
 | ☁️ Hosted agents | ⏳ | See [docs/ROADMAP.md](docs/ROADMAP.md) |
@@ -601,6 +602,36 @@ polymarket shell
 
 Supports command history. All commands work the same as the CLI, just without the `polymarket` prefix.
 
+### MCP Server (AI agents)
+
+`polymarket mcp` runs a [Model Context Protocol](https://modelcontextprotocol.io)
+server over stdio, exposing the CLI's capabilities as tools an AI agent can call.
+Register it with any MCP client:
+
+```json
+{
+  "mcpServers": {
+    "polymarket": { "command": "polymarket", "args": ["mcp"] }
+  }
+}
+```
+
+For Claude Code: `claude mcp add polymarket -- polymarket mcp`.
+
+It exposes 37 tools — market/event discovery, CLOB and on-chain data,
+wallet/account, order placement, and full paper trading — plus a guarded
+`run_cli` escape hatch for any other subcommand. Each tool re-invokes the CLI
+with `--output json`, so behaviour matches the CLI exactly:
+
+- **Paper vs live** is honoured automatically. With paper mode on (`polymarket
+  paper enable`) the order tools simulate fills; otherwise they sign and submit
+  to the live CLOB using your configured wallet. Order tools also accept a
+  per-call `paper` argument.
+- **Live trading moves real funds** — the same caveat as the CLI applies.
+
+The TUI **Settings** tab shows a live MCP panel: whether a client is connected,
+its name, tool-call count, and last activity.
+
 ### Other
 
 ```bash
@@ -679,9 +710,12 @@ src/
   auth.rs        -- Wallet resolution, RPC provider, CLOB authentication
   config.rs      -- Config file (~/.config/polymarket/config.json)
   shell.rs       -- Interactive REPL
+  mcp/           -- MCP stdio server (JSON-RPC) for AI agents
   commands/      -- One module per command group
   output/        -- Table and JSON rendering per command group
 ```
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## License
 
