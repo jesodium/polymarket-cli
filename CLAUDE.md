@@ -18,11 +18,12 @@ Source cargo env if binary not found: `source ~/.cargo/env`
 
 ## Architecture
 
-**polymarket-cli** is a Rust trading terminal for Polymarket. Three entry points share the same core (all dispatched from `main.rs`):
+**polymarket-cli** is a Rust trading terminal for Polymarket. Four entry points share the same core (all dispatched from `main.rs`):
 
 1. **TUI** (`tui/`) — primary interface; 9 tabs, async render loop, background refresh
 2. **CLI** (`commands/`) — 20+ subcommands
 3. **Shell** (`shell.rs`) — line-based interactive REPL that parses input into the same CLI subcommands
+4. **MCP** (`mcp/`) — JSON-RPC 2.0 server over stdio (`mcp` subcommand) for AI agents; each tool call re-invokes the binary as a subcommand with `--output json`, so paper/live behaviour matches the CLI exactly
 
 ### Module Map
 
@@ -44,6 +45,9 @@ Source cargo env if binary not found: `source ~/.cargo/env`
 | `src/config.rs` | wallet config: path, sig type (EOA/proxy/Gnosis), key storage |
 | `src/settings.rs` | trading mode presets, quickbuy/quicksell, slippage |
 | `src/shell.rs` | line-based interactive REPL (`Commands::Shell`) |
+| `src/mcp/mod.rs` | MCP stdio server: JSON-RPC loop, subprocess dispatch (`Commands::Mcp`) |
+| `src/mcp/tools.rs` | MCP tool registry (schemas) + tool→CLI-argv mapping |
+| `src/mcp/status.rs` | MCP liveness file (`mcp-status.json`) read by the TUI Settings tab |
 | `src/updater.rs` | self-update check against GitHub releases (`upgrade` command) |
 | `src/output/` | table (`tabled`) or JSON formatters controlled by `--output` flag |
 

@@ -1166,10 +1166,82 @@ fn settings(f: &mut Frame, app: &App, area: Rect) {
 
     let right = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(10), Constraint::Length(9)])
+        .constraints([
+            Constraint::Min(8),
+            Constraint::Length(7),
+            Constraint::Length(9),
+        ])
         .split(cols[1]);
     render_wallet_panel(f, app, right[0]);
     render_session_panel(f, app, right[1]);
+    render_mcp_panel(f, right[2]);
+}
+
+/// Right-bottom panel: MCP server status, so you can see whether an AI client
+/// is connected. The server runs as a separate process spawned by the client;
+/// this reads the status file it maintains.
+fn render_mcp_panel(f: &mut Frame, area: Rect) {
+    let status = crate::mcp::status::load();
+    let mut lines: Vec<Line> = Vec::new();
+
+    let (label, color) = match &status {
+        Some(s) if s.is_recent() => ("● Connected", GOOD),
+        Some(s) if s.state == "stopped" => ("○ Stopped", DIM),
+        Some(_) => ("◌ Idle", GOLD),
+        None => ("○ Not running", DIM),
+    };
+    lines.push(Line::from(vec![
+        Span::styled(format!("{:<22}", "Status"), Style::default().fg(DIM)),
+        Span::styled(label, Style::default().fg(color).bold()),
+    ]));
+
+    match &status {
+        Some(s) => {
+            let client = match (&s.client_name, &s.client_version) {
+                (Some(n), Some(v)) => format!("{n} v{v}"),
+                (Some(n), None) => n.clone(),
+                _ => "—".to_string(),
+            };
+            lines.push(kv_line("Client", &client));
+            let last = match (&s.last_tool, s.tool_calls) {
+                (Some(t), n) => format!("{n} (last: {t})"),
+                (None, n) => n.to_string(),
+            };
+            lines.push(kv_line("Tool calls", &last));
+            lines.push(kv_line("Last activity", &rel_time(s.last_activity)));
+        }
+        None => {
+            lines.push(Line::from(
+                "No MCP session yet. Register the server with your AI client:".fg(DIM),
+            ));
+            lines.push(Line::from(Span::styled(
+                r#"  "command": "polymarket", "args": ["mcp"]"#,
+                Style::default().fg(ACCENT),
+            )));
+        }
+    }
+
+    f.render_widget(
+        Paragraph::new(lines)
+            .block(panel("MCP Server"))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+/// Human "x ago" for an optional timestamp.
+fn rel_time(t: Option<chrono::DateTime<chrono::Utc>>) -> String {
+    let Some(t) = t else { return "—".to_string() };
+    let secs = (chrono::Utc::now() - t).num_seconds().max(0);
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86_400)
+    }
 }
 
 /// Left panel: the editable PolyGun-style trading settings.

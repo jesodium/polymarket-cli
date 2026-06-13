@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod copytrade;
 mod guard;
+mod mcp;
 mod output;
 mod paper;
 mod settings;
@@ -48,6 +49,8 @@ enum Commands {
     },
     /// Launch the line-based interactive shell
     Shell,
+    /// Run as an MCP server over stdio (for AI agents / LLM tooling)
+    Mcp,
     /// Copy-trading: follow wallets and mirror their trades
     Copytrade(commands::copytrade::CopyTradeArgs),
     /// View and edit trading settings (mode, presets, slippage, TP/SL)
@@ -90,7 +93,10 @@ enum Commands {
 async fn main() -> ExitCode {
     let cli = Cli::parse();
     let output = cli.output;
-    let is_tui = matches!(cli.command, Commands::Tui { .. } | Commands::Shell);
+    let is_tui = matches!(
+        cli.command,
+        Commands::Tui { .. } | Commands::Shell | Commands::Mcp
+    );
     let is_upgrade = matches!(cli.command, Commands::Upgrade);
 
     if !is_upgrade {
@@ -123,6 +129,7 @@ pub(crate) async fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Setup => commands::setup::execute(),
         Commands::Tui { paper } => Box::pin(tui::run(paper)).await,
         Commands::Shell => Box::pin(shell::run_shell()).await,
+        Commands::Mcp => mcp::run(),
         Commands::Copytrade(args) => commands::copytrade::execute(args, cli.output).await,
         Commands::Settings(args) => commands::settings::execute(args, cli.output),
         Commands::Markets(args) => commands::markets::execute(&gamma, args, cli.output).await,
