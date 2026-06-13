@@ -77,6 +77,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
@@ -84,9 +88,23 @@ jobs:
       - name: Generate checksums
         run: sha256sum polymarket-*.tar.gz > checksums.txt
 
+      - name: Extract release notes from CHANGELOG
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { flag = 1; next }
+            /^## \[/ { flag = 0 }
+            flag { print }
+          ' CHANGELOG.md > RELEASE_BODY.md
+          # Fall back to a stub if the version has no CHANGELOG entry yet.
+          if [ ! -s RELEASE_BODY.md ]; then
+            echo "Release ${RELEASE_TAG}." > RELEASE_BODY.md
+          fi
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: RELEASE_BODY.md
           generate_release_notes: true
           files: |
             polymarket-*.tar.gz
