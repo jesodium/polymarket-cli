@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use polymarket_client_sdk_v2::auth::state::Authenticated;
 use polymarket_client_sdk_v2::auth::{LocalSigner, Normal, Signer as _};
 use polymarket_client_sdk_v2::clob::types::SignatureType;
+use polymarket_client_sdk_v2::types::Address;
 use polymarket_client_sdk_v2::{POLYGON, clob};
 
 use crate::config;
@@ -52,9 +53,24 @@ pub async fn authenticate_with_signer(
 ) -> Result<clob::Client<Authenticated<Normal>>> {
     let sig_type = parse_signature_type(&config::resolve_signature_type(signature_type_flag)?);
 
-    unauthenticated_clob_client()?
+    let mut builder = unauthenticated_clob_client()?
         .authentication_builder(signer)
-        .signature_type(sig_type)
+        .signature_type(sig_type);
+
+    // Honor a manual funder/proxy override (issue #40). Accounts registered via
+    // the Polymarket web UI get a server-assigned proxy that differs from the
+    // CREATE2-derived address, so the SDK's auto-derivation would target the
+    // wrong wallet. Only proxy/gnosis sig types accept a funder; EOA must not.
+    if matches!(sig_type, SignatureType::Proxy | SignatureType::GnosisSafe)
+        && let Some(proxy) = config::resolve_proxy_address()?
+    {
+        let funder = Address::from_str(proxy.trim()).context(
+            "Invalid proxy address override (POLYMARKET_PROXY_ADDRESS or config.json proxy_address)",
+        )?;
+        builder = builder.funder(funder);
+    }
+
+    builder
         .authenticate()
         .await
         .context("Failed to authenticate with Polymarket CLOB")

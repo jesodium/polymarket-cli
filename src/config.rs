@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 const ENV_VAR: &str = "POLYMARKET_PRIVATE_KEY";
 const SIG_TYPE_ENV_VAR: &str = "POLYMARKET_SIGNATURE_TYPE";
+const PROXY_ENV_VAR: &str = "POLYMARKET_PROXY_ADDRESS";
 pub(crate) const DEFAULT_SIGNATURE_TYPE: &str = "proxy";
 
 pub(crate) const NO_WALLET_MSG: &str =
@@ -17,6 +18,12 @@ pub(crate) struct Config {
     pub chain_id: u64,
     #[serde(default = "default_signature_type")]
     pub signature_type: String,
+    /// Optional override for the funder/proxy wallet. Accounts created via the
+    /// Polymarket web UI (Magic/email) get a server-assigned proxy that does
+    /// not match the locally-derived CREATE2 address; set this to the real one
+    /// (look it up with `polymarket profiles get <address>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_address: Option<String>,
 }
 
 fn default_signature_type() -> String {
@@ -97,6 +104,37 @@ pub fn resolve_signature_type(cli_flag: Option<&str>) -> Result<String> {
 }
 
 pub fn save_wallet(key: &str, chain_id: u64, signature_type: &str) -> Result<()> {
+    // A freshly created/imported wallet starts with no proxy override; the
+    // derived address applies until the user sets one with `wallet set-proxy`.
+    write_config(&Config {
+        private_key: key.to_string(),
+        chain_id,
+        signature_type: signature_type.to_string(),
+        proxy_address: None,
+    })
+}
+
+/// Resolve the funder/proxy override. Priority: env var > config file.
+/// `None` means "use the derived proxy address".
+pub fn resolve_proxy_address() -> Result<Option<String>> {
+    if let Ok(v) = std::env::var(PROXY_ENV_VAR)
+        && !v.is_empty()
+    {
+        return Ok(Some(v));
+    }
+    Ok(load_config()?.and_then(|c| c.proxy_address))
+}
+
+/// Set (or clear, with `None`) the proxy override in the config file,
+/// preserving the rest of the wallet config. Errors if no wallet exists.
+pub fn set_proxy_address(proxy: Option<&str>) -> Result<()> {
+    let mut config = load_config()?.ok_or_else(|| anyhow::anyhow!("{}", NO_WALLET_MSG))?;
+    config.proxy_address = proxy.map(str::to_string);
+    write_config(&config)
+}
+
+/// Write the wallet config to disk with owner-only permissions.
+fn write_config(config: &Config) -> Result<()> {
     let dir = config_dir()?;
     fs::create_dir_all(&dir).context("Failed to create config directory")?;
 
@@ -106,12 +144,7 @@ pub fn save_wallet(key: &str, chain_id: u64, signature_type: &str) -> Result<()>
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
     }
 
-    let config = Config {
-        private_key: key.to_string(),
-        chain_id,
-        signature_type: signature_type.to_string(),
-    };
-    let json = serde_json::to_string_pretty(&config)?;
+    let json = serde_json::to_string_pretty(config)?;
     let path = config_path()?;
 
     #[cfg(unix)]
@@ -215,6 +248,17 @@ mod tests {
         unsafe { set(SIG_TYPE_ENV_VAR, "eoa") };
         assert_eq!(resolve_signature_type(None).unwrap(), "eoa");
         unsafe { unset(SIG_TYPE_ENV_VAR) };
+    }
+
+    #[test]
+    fn resolve_proxy_env_var_takes_precedence() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        unsafe { set(PROXY_ENV_VAR, "0x1234567890123456789012345678901234567890") };
+        assert_eq!(
+            resolve_proxy_address().unwrap(),
+            Some("0x1234567890123456789012345678901234567890".to_string())
+        );
+        unsafe { unset(PROXY_ENV_VAR) };
     }
 
     #[test]
