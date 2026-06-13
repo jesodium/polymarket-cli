@@ -321,7 +321,7 @@ pub(crate) struct App {
     pub history_scroll: usize,
     pub logs_scroll: usize,
 
-    /// PolyGun-style trading settings (mode, presets, slippage, TP/SL).
+    /// Trading settings (mode, presets, slippage, TP/SL).
     pub settings: Settings,
     /// Configured wallet details (live mode); `None` in paper mode.
     pub wallet: Option<WalletInfo>,

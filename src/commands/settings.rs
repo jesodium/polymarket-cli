@@ -1,4 +1,4 @@
-//! `polymarket settings` — view and edit the PolyGun-style trading settings
+//! `polymarket settings` — view and edit the trading settings
 //! (trading mode, confirmation threshold, quickbuy/quicksell presets,
 //! slippage, default take-profit / stop-loss). The TUI Settings tab edits the
 //! same file; this is the headless equivalent.

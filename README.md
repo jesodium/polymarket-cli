@@ -144,7 +144,7 @@ polymarket settings trailing 10       # 10% off peak (optional)
 
 ## Trading Settings
 
-PolyGun-style execution settings, shared by the TUI and CLI:
+Execution settings, shared by the TUI and CLI:
 
 ```bash
 polymarket settings                   # show all

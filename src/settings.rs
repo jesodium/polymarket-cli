@@ -1,7 +1,7 @@
-//! Polygun-style trading settings.
+//! Trading settings.
 //!
-//! Modeled on the PolyGun bot's Settings page: a *trading mode* that decides
-//! when an order needs confirmation, a confirmation *threshold*, customizable
+//! A *trading mode* that decides when an order needs confirmation, a
+//! confirmation *threshold*, customizable
 //! *quickbuy* / *quicksell* presets, a default *slippage* tolerance, and
 //! default *take-profit* / *stop-loss* levels that get attached to new
 //! positions. Persisted to `~/.config/polymarket/settings.json` (override with
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 const FILE_NAME: &str = "settings.json";
 const PATH_ENV_VAR: &str = "POLYMARKET_SETTINGS_FILE";
 
-/// How aggressively orders execute — the PolyGun "Trading Mode".
+/// How aggressively orders execute — the trading mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum TradingMode {

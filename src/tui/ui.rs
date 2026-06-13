@@ -1305,7 +1305,7 @@ fn rel_time(t: Option<chrono::DateTime<chrono::Utc>>) -> String {
     }
 }
 
-/// Left panel: the editable PolyGun-style trading settings.
+/// Left panel: the editable trading settings.
 fn render_trading_settings(f: &mut Frame, app: &App, area: Rect) {
     let s = &app.settings;
     let mode_value = format!("{} — {}", s.trading_mode, s.trading_mode.describe());
