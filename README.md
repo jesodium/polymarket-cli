@@ -1,6 +1,6 @@
 # Polymarket CLI & Trading Terminal
 
-> A local-first prediction-market **trading terminal** for Polymarket — browse markets, place market & limit orders, run autonomous strategies, and manage positions from a keyboard-driven TUI (or as a JSON API for scripts and agents).
+> A local-first prediction-market **trading terminal** for Polymarket — browse markets, place market & limit orders, manage positions, and run copy-trading from a keyboard-driven TUI (or as a JSON API for scripts and agents).
 
 <p align="center">
   <a href="https://github.com/jesodium/polymarket-cli/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jesodium/polymarket-cli/actions/workflows/ci.yml/badge.svg"></a>
@@ -15,25 +15,25 @@
 > [!CAUTION]
 > **❗ THIS IS HEAVILY WORK IN PROGRESS, DO NOT PUT REAL MONEY UNLESS YOU ARE WILLING TO LOSE IT ❗**
 >
-> APIs, commands, on-chain interactions, and live order routing are experimental and **not battle-tested**. Live mode signs and submits **real orders with real funds**, and autonomous strategies can trade on their own with no built-in risk caps yet. Start with `--paper`. Verify every transaction. You are solely responsible for any losses.
+> APIs, commands, on-chain interactions, and live order routing are experimental and **not battle-tested**. Live mode signs and submits **real orders with real funds**. Start with `--paper`. Verify every transaction. You are solely responsible for any losses.
 
 ---
 
-### ✨ Feature status
+### Feature status
 
 | Area | Status | Notes |
 | --- | :---: | --- |
-| 📈 Market & event browsing | ✅ | Gamma + CLOB data, JSON output |
-| 🧾 Market & limit orders | ✅ | Buy/sell, open orders, cancel, history |
-| 🧪 Paper trading | ✅ | $10k virtual account, realistic book-driven fills |
-| 🖥️ Trading terminal (TUI) | ✅ | 10 views, live order book, modal order entry |
-| 🤖 Local strategy engine | ✅ | Plugins: `momentum`, `mean_reversion`, `tp_sl`, live logs |
-| 🎯 Take-profit / stop-loss | ✅ | Per-position exit guard: TP %, SL %, trailing stop |
-| ⚙️ Trading settings | ✅ | Cautious/Standard/Expert modes, quickbuy/quicksell presets |
-| 🔌 MCP server | ✅ | `polymarket mcp` — 37 tools for AI agents, paper + live |
-| 💸 Live trading | 🚧 | Real CLOB orders wired — **untested with real funds** |
-| 🛡️ Risk caps / kill-switch | ⏳ | Planned before autonomous live is safe |
-| ☁️ Hosted agents | ⏳ | See [docs/ROADMAP.md](docs/ROADMAP.md) |
+| Market & event browsing | ✅ | Gamma + CLOB data, JSON output |
+| Market & limit orders | ✅ | Buy/sell, open orders, cancel, history |
+| Paper trading | ✅ | $10k virtual account, realistic book-driven fills |
+| Trading terminal (TUI) | ✅ | 11 views (9 tabs), live order book, modal order entry |
+| Take-profit / stop-loss / trailing | ✅ | Per-position exit guard: TP %, SL %, trailing stop |
+| Copy-trading | ✅ | Follow wallets, mirror trades (15s poll) |
+| Trading settings | ✅ | Cautious/Standard/Expert modes, quickbuy/quicksell presets |
+| MCP server | ✅ | `polymarket mcp` — 37 tools for AI agents, paper + live |
+| Live trading | 🚧 | Real CLOB orders wired — **untested with real funds** |
+| Risk caps / kill-switch | ⏳ | Planned before autonomous live is safe |
+| Hosted agents | ⏳ | See [docs/ROADMAP.md](docs/ROADMAP.md) |
 
 ## Install
 
@@ -60,21 +60,17 @@ cargo install --path .
 
 ## Trading Terminal (TUI)
 
-The primary interface is a keyboard-driven trading terminal — closer to a
-Bloomberg Terminal than a traditional CLI.
+Primary interface is a keyboard-driven trading terminal — Bloomberg Terminal style.
 
 ```bash
 polymarket tui            # LIVE mode — real wallet + CLOB (needs a wallet)
 polymarket tui --paper    # PAPER mode — $10,000 simulated account, no wallet
 ```
 
-The mode is shown in the top-left (red **⏺ LIVE** / green **◆ PAPER**) and
-colors the whole frame. In live mode the terminal mirrors your real balance and
-positions, and the order modal submits real signed orders to the CLOB; in paper
-mode everything is simulated. Views (switch with `Tab` or `1`–`9`):
+Mode shown in top-left (red **⏺ LIVE** / green **◆ PAPER**) and colors the whole frame. In live mode the terminal mirrors real balance and positions; order modal submits real signed orders to the CLOB. In paper mode everything is simulated. Tabs (9 top-level, switch with `Tab` or `1`–`9`):
 
 ```
- 1·Dashboard  2·Markets  3·Portfolio  4·Positions  5·Orders  6·History  7·Strategies  8·Logs  9·Settings
+ 1·Dashboard  2·Markets  3·Portfolio  4·Positions  5·Orders  6·History  7·Copytrade  8·Logs  9·Settings
 ┌─ POLYMARKET TERMINAL   ● live   142 markets ─────────────────────────────────┐
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ Portfolio Value │ Cash Balance │ Daily PnL  │ Total PnL                        │
@@ -85,56 +81,18 @@ mode everything is simulated. Views (switch with `Tab` or `1`–`9`):
 │ Running Strategies    1   │ 14:01:55  SELL  Fed cuts in March…    50   0.480  │
 │ ROI                +2.4%  │ …                                                  │
 └───────────────────────────┴──────────────────────────────────────────────────┘
- ↑↓ move · Enter open · / search · b buy · s sell · g attach strategy · q quit
+ ↑↓ move · Enter open · / search · b buy · s sell · p quick preset · q quit
 ```
 
-- **Markets** — browse / search / sort, `Enter` to open a market. Paste a
-  `polymarket.com` link into the search box to jump straight to that market.
-- **Market detail** — live order book, place market **and** limit orders from a
-  modal (`b`/`s`), no commands typed; `g` attaches an autonomous strategy.
-  The buy ticket has take-profit / stop-loss fields and `p` cycles your
-  quickbuy ($) / quicksell (%) presets.
-- **Orders** — review open orders and cancel with `c`, in paper **and** live
-  mode (live orders sync from the CLOB).
-- **Strategies** — create a strategy in-terminal (`n` → pick plugin, enter
-  tokens), then start / stop / enable / disable it and watch its signals,
-  orders, and logs update live.
-- **Settings** — edit trading settings in place (`Enter` to edit / cycle):
-  trading mode (Cautious / Standard / Expert confirmation), confirmation
-  threshold, quickbuy/quicksell presets, slippage, and default TP/SL/trailing
-  levels. In live mode it also shows your wallet (EOA, proxy, balance) and can
-  reveal the private key for export (`w`).
+- **Markets** — browse / search / sort, `Enter` to open a market. Paste a `polymarket.com` link into search to jump straight to that market.
+- **Market detail** — live order book, place market **and** limit orders from a modal (`b`/`s`). Buy ticket has take-profit / stop-loss fields, `p` cycles quickbuy ($) / quicksell (%) presets.
+- **Orders** — review open orders and cancel with `c`, in paper **and** live (live orders sync from CLOB).
+- **Copytrade** — view followed wallets, their recent trades, and copy-activity log.
+- **Settings** — edit trading settings in place (`Enter` to edit / cycle): trading mode (Cautious / Standard / Expert), confirmation threshold, quickbuy/quicksell presets, slippage, default TP/SL/trailing. In live mode shows wallet (EOA, proxy, balance), can reveal private key for export (`w`).
 
-## Local Strategy Engine
+## Take-Profit / Stop-Loss / Trailing Stop
 
-Run autonomous strategies locally. They receive live market data, generate
-signals, and place orders against the paper (or, in future, live) account —
-independently of the UI.
-
-```bash
-polymarket strategy list                              # available plugins + roster
-polymarket strategy add momentum --tokens <TOKEN_ID>  # configure an instance
-polymarket strategy run                               # run the engine (Ctrl-C to stop)
-polymarket strategy status                            # roster + runtime stats
-polymarket strategy logs                              # tail engine log
-```
-
-Strategies are plugins under `src/strategy/strategies/` (ships with
-`momentum`, `mean_reversion`, and `tp_sl` — a take-profit / stop-loss /
-trailing-stop exit guard). See [docs/ROADMAP.md](docs/ROADMAP.md) and
-[docs/HOSTED_AGENTS.md](docs/HOSTED_AGENTS.md).
-
-### Take-profit / stop-loss
-
-Attach an exit guard to any position — it market-sells when the mark hits your
-profit target, loss limit, or trails off its peak:
-
-```bash
-polymarket strategy add tp_sl --tokens <TOKEN_ID>   # +30% TP / -20% SL defaults
-polymarket strategy run
-```
-
-Or set defaults once and every buy from the TUI auto-arms a guard:
+Arm an exit guard on any position from the TUI order modal or via settings defaults:
 
 ```bash
 polymarket settings take-profit 40    # +40% take profit
@@ -142,9 +100,11 @@ polymarket settings stop-loss 25      # -25% stop loss
 polymarket settings trailing 10       # 10% off peak (optional)
 ```
 
+With defaults set, every buy from the TUI auto-arms a guard. When a held position crosses a threshold, the guard market-sells it. Guards persist across restarts in `~/.config/polymarket/guards.json`.
+
 ## Trading Settings
 
-Execution settings, shared by the TUI and CLI:
+Execution settings shared by the TUI and CLI:
 
 ```bash
 polymarket settings                   # show all
@@ -153,10 +113,13 @@ polymarket settings threshold 250     # Standard-mode confirm threshold ($)
 polymarket settings quickbuy 10,25,50,100
 polymarket settings quicksell 25,50,100
 polymarket settings slippage 2
+polymarket settings take-profit 40    # default TP % for new positions
+polymarket settings stop-loss 25      # default SL % for new positions
+polymarket settings trailing 10       # default trailing % for new positions
 ```
 
 - **Cautious** — every order asks for confirmation.
-- **Standard** (default) — only orders at/above the threshold confirm.
+- **Standard** (default) — only orders at/above threshold confirm.
 - **Expert** — instant execution, no confirmation.
 
 ## Quick Start
@@ -231,8 +194,7 @@ Most commands work without a wallet — browsing markets, viewing order books, c
 - On-chain operations (`approve set`, `ctf split/merge/redeem`)
 - Reward and API key management (`clob rewards`, `clob create-api-key`)
 
-Paper trading (`polymarket paper ...`) needs no wallet at all — see
-[Paper Trading](#paper-trading-simulated-no-wallet-needed).
+Paper trading (`polymarket paper ...`) needs no wallet at all — see [Paper Trading](#paper-trading-simulated-no-wallet-needed).
 
 ## Output Formats
 
@@ -414,9 +376,7 @@ polymarket clob update-balance --asset-type collateral
 
 ### Paper Trading (simulated, no wallet needed)
 
-Practice trading with a virtual balance against live Polymarket prices. Paper
-trading is fully isolated from your wallet and the live exchange — no keys,
-no signing, no real funds.
+Practice trading with a virtual balance against live Polymarket prices. Paper trading is fully isolated from your wallet and the live exchange — no keys, no signing, no real funds.
 
 ```bash
 # Turn on paper mode (creates a $10,000 virtual account the first time)
@@ -449,29 +409,43 @@ polymarket paper reset --balance 25000   # start over with a custom balance
 polymarket paper disable                 # back to live trading (data is kept)
 ```
 
-While paper mode is enabled, `clob create-order` and `clob market-order`
-route to the simulator automatically (a `[paper]` notice is printed). You can
-also force a single simulated order without toggling the mode:
+While paper mode is enabled, `clob create-order` and `clob market-order` route to the simulator automatically (a `[paper]` notice is printed). You can also force a single simulated order without toggling the mode:
 
 ```bash
-polymarket clob market-order --token 48331043336612883... --side buy --amount 5 --paper
-polymarket clob create-order --token 48331043336612883... --side buy --price 0.50 --size 10 --paper
+polymarket clob market-order --token TOKEN_ID --side buy --amount 5 --paper
+polymarket clob create-order --token TOKEN_ID --side buy --price 0.50 --size 10 --paper
 ```
 
 **How fills are simulated**
 
-- Market orders walk the live order book level by level, so large orders pay
-  realistic slippage. If the book can't absorb the full size, the order is
-  rejected (fill-or-kill).
-- Limit orders that cross the market fill immediately at the touch (with
-  price improvement if your limit is better). Otherwise they rest, reserving
-  cash (buys) or shares (sells), and fill at your limit price once any paper
-  command observes the market crossing it.
-- Positions track average entry price; realized PnL is computed per sell
-  against that average.
+- Market orders walk the live order book level by level, so large orders pay realistic slippage. If the book can't absorb the full size, the order is rejected (fill-or-kill).
+- Limit orders that cross the market fill immediately at the touch (with price improvement if your limit is better). Otherwise they rest, reserving cash (buys) or shares (sells), and fill at your limit price once any paper command observes the market crossing it.
+- Positions track average entry price; realized PnL is computed per sell against that average.
 
-Paper data persists in `~/.config/polymarket/paper_account.json` (override
-with `POLYMARKET_PAPER_FILE`). Wallet commands never touch it.
+Paper data persists in `~/.config/polymarket/paper_account.json` (override with `POLYMARKET_PAPER_FILE`). Wallet commands never touch it.
+
+### Copy-Trading
+
+Mirror trades from followed wallets. Polls every 15 seconds and places matching orders on your account (paper or live).
+
+```bash
+# Manage the roster
+polymarket copytrade add 0xWALLET_ADDRESS --label "my-trader" --max-size 50 --min-confidence 0.8
+polymarket copytrade remove 0xWALLET_ADDRESS
+polymarket copytrade list
+
+# Enable/disable individual traders or the whole engine
+polymarket copytrade enable 0xWALLET_ADDRESS
+polymarket copytrade disable 0xWALLET_ADDRESS
+
+# Show config and status
+polymarket copytrade show
+
+# Run the engine (starts when the TUI or paper mode is active)
+polymarket copytrade run
+```
+
+Copy-trade config in `~/.config/polymarket/copytrades.json`.
 
 ### Rewards & API Keys (CLOB, authenticated)
 
@@ -604,9 +578,7 @@ Supports command history. All commands work the same as the CLI, just without th
 
 ### MCP Server (AI agents)
 
-`polymarket mcp` runs a [Model Context Protocol](https://modelcontextprotocol.io)
-server over stdio, exposing the CLI's capabilities as tools an AI agent can call.
-Register it with any MCP client:
+`polymarket mcp` runs a [Model Context Protocol](https://modelcontextprotocol.io) server over stdio, exposing the CLI's capabilities as tools an AI agent can call. Register it with any MCP client:
 
 ```json
 {
@@ -618,19 +590,12 @@ Register it with any MCP client:
 
 For Claude Code: `claude mcp add polymarket -- polymarket mcp`.
 
-It exposes 37 tools — market/event discovery, CLOB and on-chain data,
-wallet/account, order placement, and full paper trading — plus a guarded
-`run_cli` escape hatch for any other subcommand. Each tool re-invokes the CLI
-with `--output json`, so behaviour matches the CLI exactly:
+It exposes 37 tools — market/event discovery, CLOB and on-chain data, wallet/account, order placement, and full paper trading — plus a guarded `run_cli` escape hatch for any other subcommand. Each tool re-invokes the CLI with `--output json`, so behaviour matches the CLI exactly:
 
-- **Paper vs live** is honoured automatically. With paper mode on (`polymarket
-  paper enable`) the order tools simulate fills; otherwise they sign and submit
-  to the live CLOB using your configured wallet. Order tools also accept a
-  per-call `paper` argument.
+- **Paper vs live** is honoured automatically. With paper mode on (`polymarket paper enable`) the order tools simulate fills; otherwise they sign and submit to the live CLOB using your configured wallet. Order tools also accept a per-call `paper` argument.
 - **Live trading moves real funds** — the same caveat as the CLI applies.
 
-The TUI **Settings** tab shows a live MCP panel: whether a client is connected,
-its name, tool-call count, and last activity.
+The TUI **Settings** tab shows a live MCP panel: whether a client is connected, its name, tool-call count, and last activity.
 
 ### Other
 
@@ -706,14 +671,70 @@ fi
 
 ```
 src/
-  main.rs        -- CLI entry point, clap parsing, error handling
-  auth.rs        -- Wallet resolution, RPC provider, CLOB authentication
-  config.rs      -- Config file (~/.config/polymarket/config.json)
-  shell.rs       -- Interactive REPL
-  mcp/           -- MCP stdio server (JSON-RPC) for AI agents
-  commands/      -- One module per command group
-  output/        -- Table and JSON rendering per command group
+  main.rs           -- Entry point, Cli struct, Commands enum, dispatch
+  auth.rs           -- Signer factory (private key → alloy signer + provider)
+  config.rs         -- Wallet config persistence (~/.config/polymarket/config.json)
+  settings.rs       -- Trading mode presets, quickbuy/quicksell, slippage, TP/SL defaults
+  trade.rs          -- Live order placement (shared by TUI order modal + copy-trade)
+  guard.rs          -- Per-token TP/SL/trailing-stop exit guard evaluation
+  shell.rs          -- Interactive line-based REPL (rustyline)
+  updater.rs        -- Self-update check against GitHub releases
+
+  commands/         -- CLI subcommand implementations (one per command group)
+    clob.rs         -- CLOB: price, book, orders, trades, balances, etc.
+    markets.rs      -- Markets list/get/search/tags
+    events.rs       -- Events list/get/tags
+    tags.rs         -- Tags list/get/related
+    series.rs       -- Series list/get
+    comments.rs     -- Comments list/get/by-user
+    profiles.rs     -- Profiles get
+    sports.rs       -- Sports list/market-types/teams
+    data.rs         -- On-chain data (positions, holders, leaderboards)
+    ctf.rs          -- CTF split/merge/redeem/decode
+    bridge.rs       -- Bridge deposit/supported-assets/status
+    wallet.rs       -- Wallet create/import/address/show/reset
+    paper.rs        -- Paper trading enable/disable/buy/sell/portfolio
+    copytrade.rs    -- Copy-trade roster management
+    approve.rs      -- Contract approvals
+    settings.rs     -- Trading settings
+    setup.rs        -- Guided first-time setup
+    upgrade.rs      -- Self-upgrade
+
+  tui/              -- ratatui-based interactive trading terminal
+    app.rs          -- State machine, 11 views, input handling
+    ui.rs           -- ratatui rendering
+    data.rs         -- Background data sync (polls Gamma/CLOB)
+    live.rs         -- Wallet/balance polling
+
+  mcp/              -- Model Context Protocol stdio server
+    mod.rs          -- JSON-RPC loop, subprocess dispatch
+    tools.rs        -- 37 tool schemas, tool→CLI-argv mapping
+    status.rs       -- MCP liveness file (read by TUI Settings tab)
+
+  paper/            -- Paper trading simulation
+    types.rs        -- PaperAccount, Position, OpenOrder, Trade, Stats
+    store.rs        -- JSON persistence (~/.config/polymarket/paper_account.json)
+    engine.rs       -- Fill simulation against live quotes
+    quotes.rs       -- Live order-book feed for the simulator
+
+  copytrade/        -- Copy-trading engine
+    config.rs       -- Followed-trader roster + per-trader sizing rules
+    engine.rs       -- Mirrors trades from followed wallets (15s poll)
+
+  output/           -- Table (tabled) + JSON formatters, one per domain
 ```
+
+### Data Flow (TUI)
+
+Keyboard → `App` state → shared state (Arc<Mutex<_>>) read by:
+- render loop (ratatui output)
+- background data loop (Gamma/CLOB API polling)
+- guard evaluator (TP/SL checks each tick)
+- copy-trade engine (followed-wallet checks every 15s)
+
+### Paper vs Live
+
+Paper mode (`--paper` flag or TUI toggle) uses `paper/` engine with a local JSON store. Orders are simulated against live quote feeds. No wallet signer is needed. Live mode requires a configured private key and approved USDC/CTF allowances.
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
