@@ -16,6 +16,45 @@ fn format_market(m: &Market) -> String {
     }
 }
 
+pub fn print_pnl_summary(positions: &[Position], output: &OutputFormat) -> anyhow::Result<()> {
+    use polymarket_client_sdk_v2::types::Decimal;
+    let cost: Decimal = positions.iter().map(|p| p.initial_value).sum();
+    let value: Decimal = positions.iter().map(|p| p.current_value).sum();
+    let unrealized: Decimal = positions.iter().map(|p| p.cash_pnl).sum();
+    let realized: Decimal = positions.iter().map(|p| p.realized_pnl).sum();
+    let total = unrealized + realized;
+    // ROI on cost basis; zero cost => zero ROI rather than a divide-by-zero.
+    let roi = if cost.is_zero() {
+        Decimal::ZERO
+    } else {
+        total / cost * Decimal::from(100)
+    };
+
+    match output {
+        OutputFormat::Table => {
+            println!("Open positions:   {}", positions.len());
+            println!("Cost basis:       {}", format_decimal(cost));
+            println!("Current value:    {}", format_decimal(value));
+            println!("Unrealized PnL:   {:+.2}", unrealized);
+            println!("Realized PnL:     {:+.2}", realized);
+            println!("Total PnL:        {:+.2}", total);
+            println!("ROI:              {:+.2}%", roi);
+        }
+        OutputFormat::Json => {
+            super::print_json(&json!({
+                "open_positions": positions.len(),
+                "cost_basis": cost.to_string(),
+                "current_value": value.to_string(),
+                "unrealized_pnl": unrealized.to_string(),
+                "realized_pnl": realized.to_string(),
+                "total_pnl": total.to_string(),
+                "roi_pct": roi.to_string(),
+            }))?;
+        }
+    }
+    Ok(())
+}
+
 pub fn print_positions(positions: &[Position], output: &OutputFormat) -> anyhow::Result<()> {
     match output {
         OutputFormat::Table => {

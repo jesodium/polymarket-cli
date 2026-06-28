@@ -115,6 +115,7 @@ pub(crate) enum SettingField {
     TakeProfit,
     StopLoss,
     Trailing,
+    CopyPoll,
 }
 
 impl SettingField {
@@ -127,6 +128,7 @@ impl SettingField {
             Self::TakeProfit => "Default take-profit (%, blank=off)",
             Self::StopLoss => "Default stop-loss (%, blank=off)",
             Self::Trailing => "Default trailing-stop (%, blank=off)",
+            Self::CopyPoll => "Copy-trade poll (seconds)",
         }
     }
 }
@@ -148,7 +150,7 @@ pub(crate) enum SettingRow {
     Field(SettingField),
 }
 
-pub(crate) const SETTING_ROWS: [SettingRow; 9] = [
+pub(crate) const SETTING_ROWS: [SettingRow; 10] = [
     SettingRow::Mode,
     SettingRow::AutoSettle,
     SettingRow::Field(SettingField::Threshold),
@@ -158,6 +160,7 @@ pub(crate) const SETTING_ROWS: [SettingRow; 9] = [
     SettingRow::Field(SettingField::TakeProfit),
     SettingRow::Field(SettingField::StopLoss),
     SettingRow::Field(SettingField::Trailing),
+    SettingRow::Field(SettingField::CopyPoll),
 ];
 
 /// Turn a pasted polymarket.com URL into a searchable slug; other queries
@@ -872,6 +875,7 @@ impl App {
             SettingField::TakeProfit => opt(s.default_take_profit_pct),
             SettingField::StopLoss => opt(s.default_stop_loss_pct),
             SettingField::Trailing => opt(s.default_trailing_stop_pct),
+            SettingField::CopyPoll => s.copy_poll_secs.to_string(),
         }
     }
 
@@ -941,6 +945,13 @@ impl App {
                 }
                 SettingField::Trailing => {
                     self.settings.default_trailing_stop_pct = parse_opt_pct(&raw)?;
+                }
+                SettingField::CopyPoll => {
+                    let v: u64 = raw
+                        .parse()
+                        .map_err(|_| "Enter whole seconds (e.g. 5).".to_string())?;
+                    self.settings.copy_poll_secs = v.max(1);
+                    self.copy_engine.set_interval(v.max(1));
                 }
             }
             Ok(())
@@ -1249,7 +1260,9 @@ impl App {
                     }
                 }
                 // The modal only ever builds market/limit orders.
-                (OrderKind::Settlement, _) => unreachable!("settlement is not an order form kind"),
+                (OrderKind::Settlement, _) => {
+                    unreachable!("settlement is not an order form kind")
+                }
                 (OrderKind::Limit, TradeSide::Sell) => {
                     let price = parse_dec(&m.price)?;
                     let size = parse_dec(&m.size)?;
@@ -1430,7 +1443,9 @@ impl App {
                     size,
                 }
             }
-            OrderKind::Settlement => unreachable!("settlement is not an order form kind"),
+            OrderKind::Settlement => {
+                unreachable!("settlement is not an order form kind")
+            }
         };
 
         let shared = Arc::clone(&self.data);
@@ -1503,7 +1518,7 @@ impl App {
         {
             let mut acct = self.account.lock().unwrap();
             *acct = PaperAccount::new(balance, true);
-            let _ = store::save(&acct);
+            let _ = store::save_force(&acct); // reset lowers next_id; bypass the stale-write guard
         }
         self.positions_sel = 0;
         self.orders_sel = 0;

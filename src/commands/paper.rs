@@ -143,7 +143,7 @@ pub async fn execute(args: PaperArgs, output: OutputFormat) -> Result<()> {
             }
             let enabled = store::load()?.is_some_and(|a| a.enabled);
             let account = PaperAccount::new(balance, enabled);
-            store::save(&account)?;
+            store::save_force(&account)?; // reset resets next_id; bypass the stale-write guard
             match output {
                 OutputFormat::Table => {
                     println!(

@@ -83,9 +83,9 @@ pub enum CopyTradeCommand {
         /// Only run this follower (default: all enabled)
         #[arg(long)]
         id: Option<String>,
-        /// Seconds between polls
-        #[arg(long, default_value = "15")]
-        interval: u64,
+        /// Seconds between polls (default: the `copy_poll_secs` setting)
+        #[arg(long)]
+        interval: Option<u64>,
         /// Mirror trades to the live CLOB instead of the paper account.
         /// Real funds — needs a configured wallet.
         #[arg(long)]
@@ -250,7 +250,10 @@ fn print_status(engine: &CopyEngine, output: OutputFormat) {
     }
 }
 
-async fn run(id: Option<String>, interval: u64, live: bool) -> Result<()> {
+async fn run(id: Option<String>, interval: Option<u64>, live: bool) -> Result<()> {
+    let interval = interval
+        .unwrap_or_else(|| crate::settings::load().copy_poll_secs)
+        .max(1);
     if store::load()?.is_none() {
         bail!(
             "No paper account. Run `polymarket paper enable` first (copy-trading mirrors onto the paper account)."
@@ -319,7 +322,7 @@ fn drain_logs(engine: &CopyEngine, seen: usize) -> usize {
 }
 
 fn build_engine(mode: ExecutionMode) -> Result<CopyEngine> {
-    build_engine_with_interval(mode, 15)
+    build_engine_with_interval(mode, crate::settings::load().copy_poll_secs)
 }
 
 fn build_engine_with_interval(mode: ExecutionMode, interval: u64) -> Result<CopyEngine> {

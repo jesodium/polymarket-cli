@@ -99,6 +99,10 @@ pub(crate) struct Settings {
     /// automatically, `false` waits for a manual claim (`r` on Positions),
     /// like polymarket.com's redeem button.
     pub auto_settle: bool,
+    /// Seconds between copy-trade polls of each followed wallet. The Data API
+    /// caches activity ~15s at the edge, so smaller values mainly cut detection
+    /// latency rather than fetch fresher data. Floored at 1.
+    pub copy_poll_secs: u64,
 }
 
 impl Default for Settings {
@@ -118,6 +122,7 @@ impl Default for Settings {
             default_stop_loss_pct: None,
             default_trailing_stop_pct: None,
             auto_settle: false,
+            copy_poll_secs: 15,
         }
     }
 }

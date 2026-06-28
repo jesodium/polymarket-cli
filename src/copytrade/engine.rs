@@ -10,6 +10,7 @@
 //! execution half does the I/O and keeps the locking discipline in one place.
 
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, bail};
@@ -188,7 +189,7 @@ struct EngineState {
 pub(crate) struct CopyEngine {
     state: Arc<Mutex<EngineState>>,
     account: Arc<Mutex<PaperAccount>>,
-    interval: u64,
+    interval: Arc<AtomicU64>,
 }
 
 impl CopyEngine {
@@ -228,13 +229,19 @@ impl CopyEngine {
         Self {
             state: Arc::new(Mutex::new(state)),
             account,
-            interval: interval.max(1),
+            interval: Arc::new(AtomicU64::new(interval.max(1))),
         }
     }
 
     /// Configured poll cadence (seconds). Exposed for status displays.
     pub fn interval(&self) -> u64 {
-        self.interval
+        self.interval.load(Ordering::Relaxed)
+    }
+
+    /// Live-update the poll cadence (seconds, floored at 1). The run loop picks
+    /// it up on the next tick, so the TUI can retune without a restart.
+    pub fn set_interval(&self, secs: u64) {
+        self.interval.store(secs.max(1), Ordering::Relaxed);
     }
 
     pub fn mode(&self) -> ExecutionMode {
@@ -633,7 +640,7 @@ impl CopyEngine {
             if let Err(e) = self.poll().await {
                 self.log(LogLevel::Error, "engine", &format!("poll failed: {e}"));
             }
-            tokio::time::sleep(std::time::Duration::from_secs(self.interval)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(self.interval())).await;
         }
     }
 

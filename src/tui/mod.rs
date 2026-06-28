@@ -31,8 +31,6 @@ use crate::paper::store;
 use crate::paper::types::{PaperAccount, default_starting_balance};
 use app::App;
 
-const COPY_POLL_SECS: u64 = 15;
-
 /// Launch the terminal. `paper = true` trades the simulated account;
 /// `paper = false` runs LIVE against the real wallet and CLOB.
 pub(crate) async fn run(paper: bool) -> Result<()> {
@@ -74,7 +72,11 @@ pub(crate) async fn run(paper: bool) -> Result<()> {
 
     // The copy engine shares the same account handle so its fills show up live
     // alongside manual trades.
-    let copy_engine = CopyEngine::new(Arc::clone(&account), COPY_POLL_SECS, mode);
+    let copy_engine = CopyEngine::new(
+        Arc::clone(&account),
+        crate::settings::load().copy_poll_secs,
+        mode,
+    );
     let shared = data::new_shared();
 
     // Background workers. The refresher also ticks the TP/SL guards.

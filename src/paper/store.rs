@@ -48,7 +48,31 @@ pub(crate) fn load_required() -> Result<PaperAccount> {
     load()?.ok_or_else(|| anyhow::anyhow!("{NO_ACCOUNT_MSG}"))
 }
 
+/// Persist the account, but refuse to clobber newer on-disk state.
+///
+/// The account file has several writers — the CLI, the long-lived TUI, and the
+/// copy engine — and the TUI keeps the snapshot it loaded at startup. Without a
+/// guard its periodic/exit saves overwrite trades the CLI just wrote, silently
+/// reverting them. `next_id` only grows as trades are recorded, so a strictly
+/// larger value on disk means our in-memory copy is stale; we skip the write
+/// rather than lose those trades. Legitimate replacements that lower `next_id`
+/// (a `reset`) must call [`save_force`].
+///
+/// ponytail: revision check, not a real lock — a tiny read-then-write TOCTOU
+/// window remains. Fine for a local single-user paper file; add `flock` if
+/// concurrent paper writes ever get heavy.
 pub(crate) fn save(account: &PaperAccount) -> Result<()> {
+    if let Ok(Some(disk)) = load()
+        && disk.next_id > account.next_id
+    {
+        return Ok(());
+    }
+    save_force(account)
+}
+
+/// Unconditional write. Use only when intentionally replacing the account
+/// (e.g. `reset`), where the on-disk revision is expected to be higher.
+pub(crate) fn save_force(account: &PaperAccount) -> Result<()> {
     let path = account_path()?;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).context("Failed to create config directory")?;
@@ -61,4 +85,47 @@ pub(crate) fn save(account: &PaperAccount) -> Result<()> {
 /// Whether paper mode is toggled on (false if no account exists).
 pub(crate) fn is_enabled() -> Result<bool> {
     Ok(load()?.is_some_and(|a| a.enabled))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::paper::types::{PaperAccount, default_starting_balance};
+
+    fn acct(next_id: u64) -> PaperAccount {
+        let mut a = PaperAccount::new(default_starting_balance(), true);
+        a.next_id = next_id;
+        a
+    }
+
+    #[test]
+    fn save_refuses_to_clobber_newer_disk_state() {
+        let path = std::env::temp_dir().join(format!("pm_paper_test_{}.json", std::process::id()));
+        // SAFETY: single-threaded test; restored before returning.
+        unsafe { std::env::set_var(PATH_ENV_VAR, &path) };
+        let _ = fs::remove_file(&path);
+
+        // A fresh CLI write seeds disk at a high revision.
+        save_force(&acct(10)).unwrap();
+        assert_eq!(load().unwrap().unwrap().next_id, 10);
+
+        // A stale writer (the TUI's startup snapshot) must NOT overwrite it.
+        save(&acct(5)).unwrap();
+        assert_eq!(
+            load().unwrap().unwrap().next_id,
+            10,
+            "stale save clobbered newer disk state"
+        );
+
+        // A genuinely newer write goes through.
+        save(&acct(12)).unwrap();
+        assert_eq!(load().unwrap().unwrap().next_id, 12);
+
+        // `reset` lowers the revision and must still take effect via save_force.
+        save_force(&acct(1)).unwrap();
+        assert_eq!(load().unwrap().unwrap().next_id, 1);
+
+        let _ = fs::remove_file(&path);
+        unsafe { std::env::remove_var(PATH_ENV_VAR) };
+    }
 }

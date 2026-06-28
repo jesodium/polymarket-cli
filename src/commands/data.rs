@@ -13,8 +13,8 @@ use polymarket_client_sdk_v2::types::{Address, B256};
 use crate::output::OutputFormat;
 use crate::output::data::{
     print_activity, print_builder_leaderboard, print_builder_volume, print_closed_positions,
-    print_holders, print_leaderboard, print_live_volume, print_open_interest, print_positions,
-    print_traded, print_trades, print_value,
+    print_holders, print_leaderboard, print_live_volume, print_open_interest, print_pnl_summary,
+    print_positions, print_traded, print_trades, print_value,
 };
 
 #[derive(Args)]
@@ -37,6 +37,12 @@ pub enum DataCommand {
         /// Pagination offset
         #[arg(long)]
         offset: Option<i32>,
+    },
+
+    /// Aggregate PnL summary across all open positions for a wallet
+    Pnl {
+        /// Wallet address (0x...)
+        address: Address,
     },
 
     /// Get closed positions for a wallet address
@@ -206,6 +212,17 @@ pub async fn execute(client: &data::Client, args: DataArgs, output: OutputFormat
 
             let positions = client.positions(&request).await?;
             print_positions(&positions, &output)?;
+        }
+
+        DataCommand::Pnl { address } => {
+            // ponytail: fetch up to 500 positions; paginate if anyone holds more.
+            let request = PositionsRequest::builder()
+                .user(address)
+                .limit(500)?
+                .build();
+
+            let positions = client.positions(&request).await?;
+            print_pnl_summary(&positions, &output)?;
         }
 
         DataCommand::ClosedPositions {
