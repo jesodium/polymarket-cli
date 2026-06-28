@@ -32,6 +32,10 @@ pub(crate) struct MarketRow {
     pub liquidity: Option<Decimal>,
     pub closed: Option<bool>,
     pub active: Option<bool>,
+    /// Market rules / resolution criteria (Gamma `description`).
+    pub description: Option<String>,
+    pub resolution_source: Option<String>,
+    pub end_date: Option<DateTime<Utc>>,
 }
 
 /// A token's live book, summarized.
@@ -359,6 +363,9 @@ fn to_market_row(m: gamma::types::response::Market) -> Option<MarketRow> {
         liquidity: m.liquidity_num,
         closed: m.closed,
         active: m.active,
+        description: m.description,
+        resolution_source: m.resolution_source,
+        end_date: m.end_date,
     })
 }
 

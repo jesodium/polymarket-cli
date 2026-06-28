@@ -340,6 +340,8 @@ pub(crate) struct App {
     /// The market opened in MarketDetail and which outcome token is focused.
     pub detail: Option<MarketRow>,
     pub detail_token: usize,
+    /// Vertical scroll offset for the market-detail left panel (rules text).
+    pub detail_scroll: u16,
 
     pub modal: Option<OrderModal>,
     /// Follow-wallet form (Copytrade tab → `n`).
@@ -417,6 +419,7 @@ impl App {
             search: String::new(),
             searching: false,
             detail: None,
+            detail_scroll: 0,
             detail_token: 0,
             modal: None,
             copy_modal: None,
@@ -805,6 +808,13 @@ impl App {
                     self.logs_scroll = self.logs_scroll.saturating_sub(1);
                 }
             }
+            View::MarketDetail => {
+                if dir > 0 {
+                    self.detail_scroll += 1;
+                } else {
+                    self.detail_scroll = self.detail_scroll.saturating_sub(1);
+                }
+            }
             _ => {}
         }
     }
@@ -816,6 +826,7 @@ impl App {
                 if let Some(row) = markets.get(self.markets_sel) {
                     self.detail = Some(row.clone());
                     self.detail_token = 0;
+                    self.detail_scroll = 0;
                     self.view = View::MarketDetail;
                     self.status = format!("Opened: {}", row.question);
                 }

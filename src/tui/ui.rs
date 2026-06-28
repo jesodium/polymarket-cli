@@ -142,7 +142,7 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
 fn render_status(f: &mut Frame, app: &App, area: Rect) {
     let help = match app.view {
         View::Markets => "↑↓/jk move · Enter open · / search · Tab views · q quit",
-        View::MarketDetail => "←→ outcome · b buy · s sell · Esc back",
+        View::MarketDetail => "←→ outcome · ↑↓ scroll · b buy · s sell · Esc back",
         View::Positions => "↑↓ move · b buy · s sell · r redeem resolved · Tab views",
         View::Orders => "↑↓ move · c cancel · Tab views",
         View::Copytrade => {
@@ -177,6 +177,7 @@ fn dashboard(f: &mut Frame, app: &App, area: Rect) {
     let acct = app.account.lock().unwrap();
     let view = engine::portfolio_view(&acct, &marks);
     let daily = daily_pnl(&acct);
+    let stats = trade_stats(&acct);
     let recent: Vec<_> = acct.trades.iter().rev().take(8).cloned().collect();
     let positions = acct.positions.len();
     let open_orders = acct.open_orders.len();
@@ -241,6 +242,20 @@ fn dashboard(f: &mut Frame, app: &App, area: Rect) {
             "Unrealized PnL",
             &loading_signed(view.unrealized_pnl, loading),
         ),
+        kv_line(
+            "Win Rate",
+            &format!("{}% ({})", stats.win_rate.round_dp(1), stats.closed),
+        ),
+        kv_line("Avg Win", &signed_money(stats.avg_win)),
+        kv_line("Avg Loss", &signed_money(stats.avg_loss)),
+        kv_line(
+            "Profit Factor",
+            &match stats.profit_factor {
+                Some(pf) => pf.round_dp(2).to_string(),
+                None => "∞".into(),
+            },
+        ),
+        kv_line("Expectancy", &signed_money(stats.expectancy)),
     ];
     let p = Paragraph::new(info)
         .block(panel("Account"))
@@ -398,10 +413,31 @@ fn market_detail(f: &mut Frame, app: &App, area: Rect) {
     }
     lines.push(Line::from(""));
     lines.push(Line::from("Press b to buy, s to sell.".fg(DIM)));
+
+    if let Some(end) = d.end_date {
+        lines.push(Line::from(vec![
+            Span::styled("Closes     ", Style::default().fg(DIM)),
+            Span::raw(end.format("%Y-%m-%d %H:%M UTC").to_string()),
+        ]));
+    }
+    if let Some(src) = d.resolution_source.as_deref().filter(|s| !s.is_empty()) {
+        lines.push(Line::from(vec![
+            Span::styled("Resolver   ", Style::default().fg(DIM)),
+            Span::raw(src.to_string()),
+        ]));
+    }
+    if let Some(rules) = d.description.as_deref().filter(|s| !s.is_empty()) {
+        lines.push(Line::from(""));
+        lines.push(Line::from("Resolution rules:".fg(ACCENT)));
+        for para in rules.lines() {
+            lines.push(Line::from(para.to_string()));
+        }
+    }
     f.render_widget(
         Paragraph::new(lines)
-            .block(panel("Market Details"))
-            .wrap(Wrap { trim: false }),
+            .block(panel("Market Details — ↑↓ scroll"))
+            .wrap(Wrap { trim: false })
+            .scroll((app.detail_scroll, 0)),
         cols[0],
     );
 
@@ -435,11 +471,11 @@ fn render_book(f: &mut Frame, app: &App, token: &str, area: Rect) {
             ]));
         }
         let spread = match (b.best_bid, b.best_ask) {
-            (Some(bid), Some(ask)) => format!("spread {:.3}", ask - bid),
+            (Some(bid), Some(ask)) => format!("{:.3}", ask - bid),
             _ => "—".into(),
         };
         rows.push(Row::new(vec![
-            Cell::from("──"),
+            Cell::from("spread").style(Style::default().fg(ACCENT)),
             Cell::from(""),
             Cell::from(spread).style(Style::default().fg(ACCENT)),
             Cell::from(""),
@@ -1988,6 +2024,64 @@ fn daily_pnl(acct: &crate::paper::types::PaperAccount) -> Decimal {
         .sum()
 }
 
+/// Aggregate win/loss stats over closed (realized) trades. Each sell carries a
+/// realized PnL; we treat every such fill as one closed trade.
+struct TradeStats {
+    closed: usize,
+    win_rate: Decimal,
+    avg_win: Decimal,
+    avg_loss: Decimal,
+    profit_factor: Option<Decimal>,
+    expectancy: Decimal,
+}
+
+fn trade_stats(acct: &crate::paper::types::PaperAccount) -> TradeStats {
+    let pnls: Vec<Decimal> = acct.trades.iter().filter_map(|t| t.realized_pnl).collect();
+    let closed = pnls.len();
+    if closed == 0 {
+        return TradeStats {
+            closed: 0,
+            win_rate: Decimal::ZERO,
+            avg_win: Decimal::ZERO,
+            avg_loss: Decimal::ZERO,
+            profit_factor: None,
+            expectancy: Decimal::ZERO,
+        };
+    }
+    let wins: Vec<Decimal> = pnls
+        .iter()
+        .copied()
+        .filter(|p| *p > Decimal::ZERO)
+        .collect();
+    let losses: Vec<Decimal> = pnls
+        .iter()
+        .copied()
+        .filter(|p| *p < Decimal::ZERO)
+        .collect();
+    let sum_win: Decimal = wins.iter().sum();
+    let sum_loss: Decimal = losses.iter().sum(); // negative
+    let avg = |xs: &[Decimal], s: Decimal| {
+        if xs.is_empty() {
+            Decimal::ZERO
+        } else {
+            s / Decimal::from(xs.len())
+        }
+    };
+    let hundred = Decimal::from(100);
+    TradeStats {
+        closed,
+        win_rate: Decimal::from(wins.len()) * hundred / Decimal::from(closed),
+        avg_win: avg(&wins, sum_win),
+        avg_loss: avg(&losses, sum_loss),
+        profit_factor: if sum_loss == Decimal::ZERO {
+            None
+        } else {
+            Some(sum_win / -sum_loss)
+        },
+        expectancy: pnls.iter().sum::<Decimal>() / Decimal::from(closed),
+    }
+}
+
 fn pnl_color(v: Decimal) -> Color {
     if v > Decimal::ZERO {
         GOOD
@@ -2048,4 +2142,54 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
     let x = area.x + (area.width.saturating_sub(w)) / 2;
     let y = area.y + (area.height.saturating_sub(h)) / 2;
     Rect::new(x, y, w, h)
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+    use crate::paper::types::{OrderKind, PaperAccount, Trade, TradeSide};
+    use rust_decimal_macros::dec;
+
+    fn close(pnl: Decimal) -> Trade {
+        Trade {
+            id: 1,
+            timestamp: chrono::Utc::now(),
+            token_id: "t".into(),
+            question: "q".into(),
+            outcome: "Yes".into(),
+            side: TradeSide::Sell,
+            kind: OrderKind::Market,
+            size: dec!(1),
+            price: dec!(0.5),
+            notional: dec!(0.5),
+            realized_pnl: Some(pnl),
+        }
+    }
+
+    #[test]
+    fn winrate_and_factors() {
+        let mut a = PaperAccount::new(dec!(1000), true);
+        // 3 wins (+10 each), 1 loss (-20): win rate 75%, PF = 30/20 = 1.5.
+        a.trades = vec![
+            close(dec!(10)),
+            close(dec!(10)),
+            close(dec!(10)),
+            close(dec!(-20)),
+        ];
+        let s = trade_stats(&a);
+        assert_eq!(s.closed, 4);
+        assert_eq!(s.win_rate, dec!(75));
+        assert_eq!(s.avg_win, dec!(10));
+        assert_eq!(s.avg_loss, dec!(-20));
+        assert_eq!(s.profit_factor, Some(dec!(1.5)));
+        assert_eq!(s.expectancy, dec!(2.5));
+    }
+
+    #[test]
+    fn no_trades_is_zeroed() {
+        let a = PaperAccount::new(dec!(1000), true);
+        let s = trade_stats(&a);
+        assert_eq!(s.closed, 0);
+        assert_eq!(s.profit_factor, None);
+    }
 }
