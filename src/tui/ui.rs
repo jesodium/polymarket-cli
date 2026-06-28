@@ -245,7 +245,12 @@ fn dashboard(f: &mut Frame, app: &App, area: Rect) {
         ),
         kv_line(
             "Win Rate",
-            &format!("{}% ({})", stats.win_rate.round_dp(1), stats.closed),
+            &format!(
+                "{}% ({}W {}L)",
+                stats.win_rate.round_dp(1),
+                stats.wins,
+                stats.losses
+            ),
         ),
         kv_line("Avg Win", &signed_money(stats.avg_win)),
         kv_line("Avg Loss", &signed_money(stats.avg_loss)),
@@ -2039,7 +2044,8 @@ fn daily_pnl(acct: &crate::paper::types::PaperAccount) -> Decimal {
 /// Aggregate win/loss stats over closed (realized) trades. Each sell carries a
 /// realized PnL; we treat every such fill as one closed trade.
 struct TradeStats {
-    closed: usize,
+    wins: usize,
+    losses: usize,
     win_rate: Decimal,
     avg_win: Decimal,
     avg_loss: Decimal,
@@ -2052,7 +2058,8 @@ fn trade_stats(acct: &crate::paper::types::PaperAccount) -> TradeStats {
     let closed = pnls.len();
     if closed == 0 {
         return TradeStats {
-            closed: 0,
+            wins: 0,
+            losses: 0,
             win_rate: Decimal::ZERO,
             avg_win: Decimal::ZERO,
             avg_loss: Decimal::ZERO,
@@ -2081,7 +2088,8 @@ fn trade_stats(acct: &crate::paper::types::PaperAccount) -> TradeStats {
     };
     let hundred = Decimal::from(100);
     TradeStats {
-        closed,
+        wins: wins.len(),
+        losses: losses.len(),
         win_rate: Decimal::from(wins.len()) * hundred / Decimal::from(closed),
         avg_win: avg(&wins, sum_win),
         avg_loss: avg(&losses, sum_loss),
@@ -2235,7 +2243,8 @@ mod stats_tests {
             close(dec!(-20)),
         ];
         let s = trade_stats(&a);
-        assert_eq!(s.closed, 4);
+        assert_eq!(s.wins, 3);
+        assert_eq!(s.losses, 1);
         assert_eq!(s.win_rate, dec!(75));
         assert_eq!(s.avg_win, dec!(10));
         assert_eq!(s.avg_loss, dec!(-20));
@@ -2247,7 +2256,8 @@ mod stats_tests {
     fn no_trades_is_zeroed() {
         let a = PaperAccount::new(dec!(1000), true);
         let s = trade_stats(&a);
-        assert_eq!(s.closed, 0);
+        assert_eq!(s.wins, 0);
+        assert_eq!(s.losses, 0);
         assert_eq!(s.profit_factor, None);
     }
 
