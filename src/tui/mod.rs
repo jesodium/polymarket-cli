@@ -119,9 +119,10 @@ async fn event_loop<B: ratatui::backend::Backend>(
         app.pre_frame();
         terminal.draw(|f| ui::render(f, app))?;
 
-        // Block up to 200ms for input; background tasks keep running on other
-        // worker threads, so the UI redraws ~5x/sec even when idle.
-        if event::poll(Duration::from_millis(200))?
+        // Block up to 90ms for input; background tasks keep running on other
+        // worker threads, so the UI redraws ~11x/sec even when idle (drives
+        // animations — spinners, matrix rain). Cheap: only reads cached state.
+        if event::poll(Duration::from_millis(90))?
             && let Event::Key(key) = event::read()?
             && key.kind == KeyEventKind::Press
         {

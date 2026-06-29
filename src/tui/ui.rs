@@ -8,7 +8,8 @@ use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
-    Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table, TableState, Wrap,
+    Block, BorderType, Borders, Cell, Clear, List, ListItem, Padding, Paragraph, Row, Table,
+    TableState, Wrap,
 };
 
 use super::app::{
@@ -32,6 +33,10 @@ const ZEBRA_BG: Color = Color::Rgb(26, 28, 34);
 const LIVE: Color = Color::Rgb(248, 81, 73);
 const PAPER: Color = Color::Rgb(63, 185, 80);
 
+/// Per-render mirror of `app.frame`, so pure row-builders can animate without
+/// threading the frame counter through every signature. Set once in [`render`].
+static FRAME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// The headline colour for the current trading mode.
 fn mode_color(app: &App) -> Color {
     if app.live { LIVE } else { PAPER }
@@ -45,36 +50,87 @@ fn mode_label(app: &App) -> &'static str {
     }
 }
 
+/// Braille spinner frame for the current tick.
+fn spinner(frame: u64) -> char {
+    const S: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    S[frame as usize % S.len()]
+}
+
+/// Spinner for code that can't see `app.frame` (reads the render-time mirror).
+fn spinner_now() -> char {
+    spinner(FRAME.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// How many of `w` bar cells are filled for a probability `p` in [0,1].
+fn prob_count(p: Decimal, w: usize) -> usize {
+    (0..w)
+        .filter(|k| p > Decimal::from(*k as i64) / Decimal::from(w as i64))
+        .count()
+}
+
+fn dec_half() -> Decimal {
+    Decimal::new(5, 1)
+}
+
+/// A slow pulse in [0,1] for breathing/glow effects, period ~2.4s at 11fps.
+fn pulse(frame: u64) -> f32 {
+    let t = (frame % 27) as f32 / 27.0;
+    (1.0 - (t * std::f32::consts::TAU).cos()) / 2.0
+}
+
+/// Lerp two colours; `t` in [0,1].
+fn lerp(a: Color, b: Color, t: f32) -> Color {
+    let (ar, ag, ab) = rgb(a);
+    let (br, bg, bb) = rgb(b);
+    let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t) as u8;
+    Color::Rgb(m(ar, br), m(ag, bg), m(ab, bb))
+}
+
+fn rgb(c: Color) -> (u8, u8, u8) {
+    match c {
+        Color::Rgb(r, g, b) => (r, g, b),
+        Color::Cyan => (0, 200, 220),
+        Color::White => (235, 235, 235),
+        Color::Black => (0, 0, 0),
+        _ => (180, 180, 180),
+    }
+}
+
 pub(crate) fn render(f: &mut Frame, app: &App) {
+    FRAME.store(app.frame, std::sync::atomic::Ordering::Relaxed);
     // Onboarding takes over the full screen when no wallet is configured.
     if let Some(o) = &app.onboarding {
         render_onboarding(f, o);
         return;
     }
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // tab bar
-            Constraint::Min(5),    // body
-            Constraint::Length(3), // status
-        ])
+    // Shell: left sidebar nav | (body over status).
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(22), Constraint::Min(20)])
         .split(f.area());
 
-    render_tabs(f, app, chunks[0]);
+    render_sidebar(f, app, cols[0]);
+
+    let right = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(3)])
+        .split(cols[1]);
+    let body = right[0];
+
     match app.view {
         View::Onboarding => {} // handled by early return above
-        View::Dashboard => dashboard(f, app, chunks[1]),
-        View::Markets => markets(f, app, chunks[1]),
-        View::MarketDetail => market_detail(f, app, chunks[1]),
-        View::Portfolio => portfolio(f, app, chunks[1]),
-        View::Positions => positions(f, app, chunks[1]),
-        View::Orders => orders(f, app, chunks[1]),
-        View::History => history(f, app, chunks[1]),
-        View::Copytrade => copytrade(f, app, chunks[1]),
-        View::Logs => logs(f, app, chunks[1]),
-        View::Settings => settings(f, app, chunks[1]),
+        View::Dashboard => dashboard(f, app, body),
+        View::Markets => markets(f, app, body),
+        View::MarketDetail => market_detail(f, app, body),
+        View::Portfolio => portfolio(f, app, body),
+        View::Positions => positions(f, app, body),
+        View::Orders => orders(f, app, body),
+        View::History => history(f, app, body),
+        View::Copytrade => copytrade(f, app, body),
+        View::Logs => logs(f, app, body),
+        View::Settings => settings(f, app, body),
     }
-    render_status(f, app, chunks[2]);
+    render_status(f, app, right[1]);
 
     if let Some(modal) = &app.modal {
         render_modal(f, app, modal);
@@ -93,50 +149,85 @@ pub(crate) fn render(f: &mut Frame, app: &App) {
     }
 }
 
-fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
+/// Left navigation rail: mode badge, the view list with an active-item bar,
+/// and a live connection footer.
+fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
+    const W: usize = 20; // inner width of the rail
     let mc = mode_color(app);
-    let mut spans = vec![
-        Span::styled(
-            mode_label(app),
-            Style::default().fg(Color::Black).bg(mc).bold(),
-        ),
-        Span::raw(" "),
+    // The mode badge breathes — a gentle pulse, more alarming in LIVE.
+    let badge_bg = lerp(mc, Color::Rgb(255, 255, 255), pulse(app.frame) * 0.45);
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled(
+            format!("{:^W$}", mode_label(app).trim()),
+            Style::default().fg(Color::Black).bg(badge_bg).bold(),
+        )),
+        Line::from(""),
     ];
+
     for (i, v) in View::TABS.iter().enumerate() {
         let active = *v == app.view || (app.view == View::MarketDetail && *v == View::Markets);
-        let style = if active {
-            Style::default().fg(Color::Black).bg(ACCENT).bold()
+        let label = format!(" {} {}", i + 1, v.title());
+        if active {
+            lines.push(Line::from(vec![
+                Span::styled("▌", Style::default().fg(ACCENT)),
+                Span::styled(
+                    format!("{label:<width$}", width = W - 1),
+                    Style::default().fg(Color::White).bg(SELECT_BG).bold(),
+                ),
+            ]));
         } else {
-            Style::default().fg(DIM)
-        };
-        spans.push(Span::styled(format!(" {}·{} ", i + 1, v.title()), style));
+            lines.push(Line::from(Span::styled(
+                format!(" {label}"),
+                Style::default().fg(DIM),
+            )));
+        }
+    }
+
+    // Push the footer to the bottom of the rail.
+    let used = lines.len() as u16 + 2; // + border
+    let pad = area.height.saturating_sub(used + 1);
+    for _ in 0..pad {
+        lines.push(Line::from(""));
     }
 
     let d = app.data.lock().unwrap();
-    let conn = if d.connected {
-        Span::styled("● connected", Style::default().fg(GOOD))
-    } else {
-        Span::styled("○ offline", Style::default().fg(GOLD))
-    };
+    let connected = d.connected;
     let markets_status = d.markets_status.clone();
     drop(d);
+    // Footer: heartbeat when live, spinner while data is syncing.
+    let loading = data_loading(app);
+    let footer = if !connected {
+        Span::styled(
+            format!(" {} offline", spinner(app.frame)),
+            Style::default().fg(GOLD),
+        )
+    } else if loading {
+        Span::styled(
+            format!(" {} syncing…", spinner(app.frame)),
+            Style::default().fg(ACCENT),
+        )
+    } else {
+        let dot = lerp(Color::Rgb(20, 70, 35), GOOD, pulse(app.frame));
+        Span::styled(" ● connected", Style::default().fg(dot))
+    };
+    lines.push(Line::from(footer));
+    if !markets_status.is_empty() {
+        lines.push(Line::from(Span::styled(
+            format!(" {markets_status}"),
+            Style::default().fg(DIM),
+        )));
+    }
 
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(mc))
         .title(Span::styled(
-            " POLYMARKET TERMINAL ",
+            " ◈ POLYMARKET ",
             Style::default().fg(mc).bold(),
-        ))
-        .title_top(
-            Line::from(vec![
-                Span::raw(" "),
-                conn,
-                Span::styled(format!("  {markets_status} "), Style::default().fg(DIM)),
-            ])
-            .right_aligned(),
-        );
-    f.render_widget(Paragraph::new(Line::from(spans)).block(block), area);
+        ));
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 fn render_status(f: &mut Frame, app: &App, area: Rect) {
@@ -164,6 +255,7 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
     let p = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(mc)),
     );
     f.render_widget(p, area);
@@ -233,7 +325,7 @@ fn dashboard(f: &mut Frame, app: &App, area: Rect) {
         kv_line(
             "ROI",
             &if loading {
-                LOADING.into()
+                loading_anim()
             } else {
                 format!("{}%", view.roi_pct)
             },
@@ -387,71 +479,96 @@ fn market_detail(f: &mut Frame, app: &App, area: Rect) {
     };
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
         .split(area);
 
-    // Left: market info + outcomes.
-    let mut lines = vec![
-        Line::from(d.question.clone().bold()),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("Market ID  ", Style::default().fg(DIM)),
-            Span::raw(d.id.clone()),
-        ]),
-        Line::from(""),
-        Line::from("Outcomes (←→ to focus):".fg(ACCENT)),
-    ];
-    for (i, tid) in d.token_ids.iter().enumerate() {
+    // Left column: header · outcome probability bars · resolution rules.
+    let n = d.token_ids.len() as u16;
+    let left = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),     // header
+            Constraint::Length(n + 2), // outcomes
+            Constraint::Min(4),        // rules
+        ])
+        .split(cols[0]);
+
+    // Header: question + the facts that matter (close, resolver, volume).
+    let mut facts: Vec<Span> = Vec::new();
+    if let Some(end) = d.end_date {
+        facts.push(Span::styled("closes ", Style::default().fg(DIM)));
+        facts.push(Span::raw(end.format("%b %d %H:%M").to_string()));
+    }
+    if let Some(v) = d.volume {
+        facts.push(Span::styled("   vol ", Style::default().fg(DIM)));
+        facts.push(Span::raw(short_money(Some(v))));
+    }
+    if let Some(src) = d.resolution_source.as_deref().filter(|s| !s.is_empty()) {
+        facts.push(Span::styled("   via ", Style::default().fg(DIM)));
+        facts.push(Span::raw(truncate(src, 18)));
+    }
+    facts.push(Span::styled(
+        format!("   #{}", truncate(&d.id, 10)),
+        Style::default().fg(PANEL),
+    ));
+    f.render_widget(
+        Paragraph::new(vec![
+            Line::from(d.question.clone().bold()),
+            Line::from(facts),
+        ])
+        .block(panel("Market"))
+        .wrap(Wrap { trim: true }),
+        left[0],
+    );
+
+    // Outcomes as horizontal probability bars; ←→ moves the focus.
+    const BARW: usize = 14;
+    let mut outcomes: Vec<Line> = Vec::new();
+    for (i, _tid) in d.token_ids.iter().enumerate() {
         let name = d
             .outcomes
             .get(i)
             .cloned()
             .unwrap_or_else(|| format!("Outcome {}", i + 1));
-        let price = d
-            .prices
-            .get(i)
-            .map(|p| pct(*p))
-            .unwrap_or_else(|| "—".into());
-        let marker = if i == app.detail_token { "▶ " } else { "  " };
-        let style = if i == app.detail_token {
-            Style::default().fg(Color::Black).bg(ACCENT)
+        let p = d.prices.get(i).copied().unwrap_or(Decimal::ZERO);
+        let selected = i == app.detail_token;
+        let fill = prob_count(p, BARW);
+        let bar_color = if selected {
+            ACCENT
+        } else if p >= dec_half() {
+            GOOD
         } else {
-            Style::default()
+            GOLD
         };
-        lines.push(Line::from(vec![
-            Span::styled(format!("{marker}{name:<20}"), style),
-            Span::raw(format!("  {price}  ")),
-            Span::styled(truncate(tid, 16), Style::default().fg(DIM)),
+        let marker = if selected { "▶ " } else { "  " };
+        let name_style = if selected {
+            Style::default().fg(ACCENT).bold()
+        } else {
+            Style::default().fg(Color::White)
+        };
+        outcomes.push(Line::from(vec![
+            Span::styled(format!("{marker}{:<12}", truncate(&name, 12)), name_style),
+            Span::styled("█".repeat(fill), Style::default().fg(bar_color)),
+            Span::styled("░".repeat(BARW - fill), Style::default().fg(PANEL)),
+            Span::styled(format!(" {:>4}", pct(p)), Style::default().fg(bar_color)),
         ]));
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::from("Press b to buy, s to sell.".fg(DIM)));
-
-    if let Some(end) = d.end_date {
-        lines.push(Line::from(vec![
-            Span::styled("Closes     ", Style::default().fg(DIM)),
-            Span::raw(end.format("%Y-%m-%d %H:%M UTC").to_string()),
-        ]));
-    }
-    if let Some(src) = d.resolution_source.as_deref().filter(|s| !s.is_empty()) {
-        lines.push(Line::from(vec![
-            Span::styled("Resolver   ", Style::default().fg(DIM)),
-            Span::raw(src.to_string()),
-        ]));
-    }
-    if let Some(rules) = d.description.as_deref().filter(|s| !s.is_empty()) {
-        lines.push(Line::from(""));
-        lines.push(Line::from("Resolution rules:".fg(ACCENT)));
-        for para in rules.lines() {
-            lines.push(Line::from(para.to_string()));
-        }
     }
     f.render_widget(
-        Paragraph::new(lines)
-            .block(panel("Market Details — ↑↓ scroll"))
+        Paragraph::new(outcomes).block(panel("Outcomes ←→ · b buy · s sell")),
+        left[1],
+    );
+
+    // Resolution rules (scrollable).
+    let rules: Vec<Line> = match d.description.as_deref().filter(|s| !s.is_empty()) {
+        Some(text) => text.lines().map(|l| Line::from(l.to_string())).collect(),
+        None => vec![Line::from("No resolution rules provided.".fg(DIM))],
+    };
+    f.render_widget(
+        Paragraph::new(rules)
+            .block(panel("Resolution ↑↓ scroll"))
             .wrap(Wrap { trim: false })
             .scroll((app.detail_scroll, 0)),
-        cols[0],
+        left[2],
     );
 
     // Right: order book for focused token + position.
@@ -575,21 +692,25 @@ fn portfolio(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            let ph = if loading { LOADING } else { "—" };
+            let ph = if loading {
+                loading_anim()
+            } else {
+                "—".to_string()
+            };
             let (mark_cell, value_cell, upnl_cell) = match p.mark_price {
                 Some(mark) => {
                     let upnl = p.unrealized_pnl.unwrap_or_default();
                     (
                         Cell::from(format!("{mark:.3}")),
-                        Cell::from(p.market_value.map(money).unwrap_or_else(|| ph.into())),
+                        Cell::from(p.market_value.map(money).unwrap_or_else(|| ph.clone())),
                         Cell::from(signed_money(upnl)).style(Style::default().fg(pnl_color(upnl))),
                     )
                 }
                 None => {
                     let dim = Style::default().fg(DIM);
                     (
-                        Cell::from(ph).style(dim),
-                        Cell::from(ph).style(dim),
+                        Cell::from(ph.clone()).style(dim),
+                        Cell::from(ph.clone()).style(dim),
                         Cell::from(ph).style(dim),
                     )
                 }
@@ -701,11 +822,15 @@ fn positions(f: &mut Frame, app: &App, area: Rect) {
 /// Until a mark exists, the quote-derived cells show "loading…" (during the
 /// first refresh) or "—", never a misleading $0.00 uPnL.
 fn open_position_row(p: &PositionView, zi: usize, loading: bool) -> Row<'static> {
-    let placeholder = if loading { LOADING } else { "—" };
+    let placeholder = if loading {
+        loading_anim()
+    } else {
+        "—".to_string()
+    };
     let value_str = p
         .market_value
         .map(money)
-        .unwrap_or_else(|| placeholder.to_string());
+        .unwrap_or_else(|| placeholder.clone());
 
     let (mark_cell, upnl_cell, roi_cell) = match p.mark_price {
         Some(mark) => {
@@ -724,8 +849,8 @@ fn open_position_row(p: &PositionView, zi: usize, loading: bool) -> Row<'static>
         None => {
             let dim = Style::default().fg(DIM);
             (
-                Cell::from(placeholder).style(dim),
-                Cell::from(placeholder).style(dim),
+                Cell::from(placeholder.clone()).style(dim),
+                Cell::from(placeholder.clone()).style(dim),
                 Cell::from(placeholder).style(dim),
             )
         }
@@ -1627,13 +1752,13 @@ fn render_onboarding(f: &mut Frame, state: &OnboardingState) {
 // --- Wallet action modal (Settings tab) ----------------------------------
 
 fn render_wallet_action_modal(f: &mut Frame, m: &WalletActionModal) {
-    let area = centered_rect(56, 14, f.area());
-    f.render_widget(Clear, area);
     match m.action {
         WalletAction::Create => {
-            let mut lines = vec![Line::from("Create new wallet".bold()), Line::from("")];
+            let mut lines = Vec::new();
             if m.confirmed {
-                lines.push(Line::from("Generating wallet…".fg(DIM)));
+                lines.push(Line::from(
+                    format!("{} generating wallet…", spinner_now()).fg(DIM),
+                ));
             } else {
                 lines.push(Line::from("This will REPLACE your current wallet.".fg(BAD)));
                 lines.push(Line::from(
@@ -1642,39 +1767,23 @@ fn render_wallet_action_modal(f: &mut Frame, m: &WalletActionModal) {
                 lines.push(Line::from(""));
                 lines.push(Line::from("Press Enter to confirm · Esc to cancel".fg(DIM)));
             }
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" NEW WALLET ".bold())
-                .border_style(Style::default().fg(GOLD));
-            f.render_widget(
-                Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
-                area,
-            );
+            popup(f, 58, "NEW WALLET", GOLD, lines);
         }
         WalletAction::Import => {
             let mut lines = vec![
-                Line::from("Import wallet".bold()),
-                Line::from(""),
-                Line::from(Span::styled("Private key:", Style::default().fg(DIM))),
+                Line::from(Span::styled("Private key", Style::default().fg(DIM))),
                 Line::from(format!("{}█", m.import_key)),
                 Line::from(""),
             ];
             if let Some(e) = &m.error {
                 lines.push(Line::from(Span::styled(
-                    e.clone(),
+                    format!("✗ {e}"),
                     Style::default().fg(BAD),
                 )));
                 lines.push(Line::from(""));
             }
             lines.push(Line::from("Enter to import · Esc to cancel".fg(DIM)));
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" IMPORT WALLET ".bold())
-                .border_style(Style::default().fg(ACCENT));
-            f.render_widget(
-                Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
-                area,
-            );
+            popup(f, 58, "IMPORT WALLET", ACCENT, lines);
         }
     }
 }
@@ -1682,11 +1791,9 @@ fn render_wallet_action_modal(f: &mut Frame, m: &WalletActionModal) {
 // --- Modal -----------------------------------------------------------------
 
 fn render_modal(f: &mut Frame, app: &App, m: &OrderModal) {
-    let area = centered_rect(60, 22, f.area());
-    f.render_widget(Clear, area);
     let side = m.side.to_string();
     let venue = if app.live { "LIVE" } else { "PAPER" };
-    let title = format!(" {side} ORDER · {venue} — {} ", truncate(&m.outcome, 18));
+    let title = format!("{side} ORDER · {venue} — {}", truncate(&m.outcome, 18));
 
     let kind_line = Line::from(vec![
         Span::raw("Type: "),
@@ -1696,20 +1803,88 @@ fn render_modal(f: &mut Frame, app: &App, m: &OrderModal) {
         Span::styled("   (m / L)", Style::default().fg(DIM)),
     ]);
 
-    let mut lines = vec![Line::from(truncate(&m.question, 52).fg(ACCENT))];
+    let border = if app.live {
+        LIVE
+    } else if m.side == TradeSide::Buy {
+        GOOD
+    } else {
+        BAD
+    };
+
+    // Live execution price from the book; fall back to the last mark.
+    let (bid, ask) = {
+        let d = app.data.lock().unwrap();
+        let b = d.book(&m.token_id).cloned();
+        (
+            b.as_ref().and_then(|b| b.best_bid),
+            b.as_ref().and_then(|b| b.best_ask),
+        )
+    };
+    let mark = marks_snapshot(app).get(&m.token_id).copied();
+    let exec_px = match m.kind {
+        OrderKind::Limit => m.price.parse::<Decimal>().ok(),
+        _ => match m.side {
+            TradeSide::Buy => ask.or(mark),
+            TradeSide::Sell => bid.or(mark),
+        },
+    };
+
+    let area = centered_rect(78, 19, f.area());
+    f.render_widget(Clear, area);
+    let block = modal_block(&title, border);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    // header (question / live warning) | body (ticket | receipt) | footer.
+    let header_h = if app.live { 2 } else { 1 };
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(header_h),
+            Constraint::Min(6),
+            Constraint::Length(2),
+        ])
+        .split(inner);
+
+    let mut head = vec![Line::from(truncate(&m.question, 72).fg(ACCENT))];
     if app.live {
-        lines.push(Line::from(Span::styled(
-            "⚠ REAL FUNDS — this submits a signed order to the CLOB.",
+        head.push(Line::from(Span::styled(
+            "⚠ REAL FUNDS — submits a signed CLOB order.",
             Style::default().fg(LIVE).bold(),
         )));
     }
-    lines.push(Line::from(""));
-    lines.push(kind_line);
-    lines.push(Line::from(""));
+    f.render_widget(Paragraph::new(head), rows[0]);
+
+    let body = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(rows[1]);
+    render_order_form(f, app, m, kind_line, body[0]);
+    render_order_receipt(f, m, exec_px, bid, ask, body[1]);
+
+    let footer = if m.awaiting_confirm {
+        Line::from(Span::styled(
+            "⏎ CONFIRM — send order   ·   Esc cancel",
+            Style::default().fg(GOLD).bold(),
+        ))
+    } else if let Some(err) = &m.error {
+        Line::from(Span::styled(format!("✗ {err}"), Style::default().fg(BAD)))
+    } else {
+        Line::from(Span::styled(
+            "Tab field · m/L type · p preset · ⏎ submit · Esc cancel",
+            Style::default().fg(DIM),
+        ))
+    };
+    f.render_widget(Paragraph::new(footer).wrap(Wrap { trim: true }), rows[2]);
+}
+
+/// Left pane of the order ticket: the editable inputs.
+fn render_order_form(f: &mut Frame, app: &App, m: &OrderModal, kind_line: Line, area: Rect) {
+    let mut lines = vec![kind_line, Line::from("")];
     match m.kind {
         OrderKind::Market => {
             let label = if m.side == TradeSide::Buy {
-                "Amount (pUSD)"
+                "Amount ($)"
             } else {
                 "Shares"
             };
@@ -1717,16 +1892,11 @@ fn render_modal(f: &mut Frame, app: &App, m: &OrderModal) {
         }
         OrderKind::Limit => {
             lines.push(field_line("Price", &m.price, m.field == ModalField::Price));
-            lines.push(field_line(
-                "Size (shares)",
-                &m.size,
-                m.field == ModalField::Size,
-            ));
+            lines.push(field_line("Size", &m.size, m.field == ModalField::Size));
         }
-        // The order form never carries a settlement.
         OrderKind::Settlement => {}
     }
-    // Take-profit / stop-loss guard fields on buys (auto-attached on fill).
+    // Take-profit / stop-loss guards auto-attach on fill (buys only).
     if m.side == TradeSide::Buy {
         lines.push(field_line(
             "Take-profit %",
@@ -1739,14 +1909,14 @@ fn render_modal(f: &mut Frame, app: &App, m: &OrderModal) {
             m.field == ModalField::StopLoss,
         ));
     }
-    // Preset hint: one-tap quickbuy $ / quicksell % from Settings.
+    lines.push(Line::from(""));
     let preset_hint = match m.side {
         TradeSide::Buy => format!(
-            "p quick-fill: {}",
+            "p: {}",
             crate::settings::fmt_money_list(&app.settings.quickbuy_presets)
         ),
         TradeSide::Sell => format!(
-            "p quick-fill: {} of {} held",
+            "p: {} of {} held",
             crate::settings::fmt_pct_list(&app.settings.quicksell_presets),
             m.held.round_dp(2)
         ),
@@ -1757,42 +1927,122 @@ fn render_modal(f: &mut Frame, app: &App, m: &OrderModal) {
     )));
     lines.push(Line::from(Span::styled(
         format!(
-            "slippage {}% · mode {}",
+            "slip {}% · {}",
             app.settings.slippage_pct.normalize(),
             app.settings.trading_mode
         ),
         Style::default().fg(DIM),
     )));
-    lines.push(Line::from(""));
-    if m.awaiting_confirm {
-        lines.push(Line::from(Span::styled(
-            "CONFIRM ORDER — Enter to send, Esc to cancel.",
-            Style::default().fg(GOLD).bold(),
-        )));
-    }
-    if let Some(err) = &m.error {
-        lines.push(Line::from(Span::styled(
-            err.clone(),
-            Style::default().fg(BAD),
-        )));
-    }
-    lines.push(Line::from(
-        "Tab next field · p preset · Enter submit · Esc cancel".fg(DIM),
-    ));
-
-    let border = if app.live {
-        LIVE
-    } else if m.side == TradeSide::Buy {
-        GOOD
-    } else {
-        BAD
-    };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title.bold())
-        .border_style(Style::default().fg(border));
     f.render_widget(
-        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
+        Paragraph::new(lines)
+            .block(panel("Ticket"))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+/// Right pane: a live receipt — what you pay, shares, and payout if it resolves
+/// your way. This is the part that makes the order legible at a glance.
+fn render_order_receipt(
+    f: &mut Frame,
+    m: &OrderModal,
+    exec_px: Option<Decimal>,
+    bid: Option<Decimal>,
+    ask: Option<Decimal>,
+    area: Rect,
+) {
+    let px = |p: Option<Decimal>| p.map(|v| format!("{v:.3}")).unwrap_or_else(|| "—".into());
+    let dec = |p: Option<Decimal>| {
+        p.map(|v| v.round_dp(2).to_string())
+            .unwrap_or_else(|| "—".into())
+    };
+    let kv = |k: &str, v: String, c: Color| {
+        Line::from(vec![
+            Span::styled(format!("{k:<12}"), Style::default().fg(DIM)),
+            Span::styled(v, Style::default().fg(c)),
+        ])
+    };
+    let won = |profit: Decimal| {
+        Line::from(Span::styled(
+            format!("→ if wins  {}", signed_money(profit)),
+            Style::default()
+                .fg(if profit >= Decimal::ZERO { GOOD } else { BAD })
+                .bold(),
+        ))
+    };
+
+    let mut lines = vec![
+        kv(
+            "Bid / Ask",
+            format!("{} / {}", px(bid), px(ask)),
+            Color::White,
+        ),
+        kv("Exec ~", px(exec_px), ACCENT),
+        Line::from(""),
+    ];
+    let amt = m.amount.parse::<Decimal>().ok();
+    let size = m.size.parse::<Decimal>().ok();
+    let price = m.price.parse::<Decimal>().ok();
+    match (m.kind, m.side) {
+        (OrderKind::Market, TradeSide::Buy) => {
+            let shares = match (amt, exec_px) {
+                (Some(p), Some(x)) if x > Decimal::ZERO => Some(p / x),
+                _ => None,
+            };
+            lines.push(kv("You pay", dec(amt), Color::White));
+            lines.push(kv("Est. shares", dec(shares), Color::White));
+            if let (Some(p), Some(s)) = (amt, shares) {
+                lines.push(kv("Max payout", money(s), GOLD));
+                lines.push(Line::from(""));
+                lines.push(won(s - p));
+            }
+        }
+        (OrderKind::Market, TradeSide::Sell) => {
+            let proceeds = match (amt, exec_px) {
+                (Some(s), Some(x)) => Some(s * x),
+                _ => None,
+            };
+            lines.push(kv("Sell shares", dec(amt), Color::White));
+            lines.push(kv(
+                "Proceeds",
+                proceeds.map(money).unwrap_or_else(|| "—".into()),
+                GOOD,
+            ));
+        }
+        (OrderKind::Limit, side) => {
+            let cost = match (price, size) {
+                (Some(p), Some(s)) => Some(p * s),
+                _ => None,
+            };
+            lines.push(kv("Size", dec(size), Color::White));
+            match side {
+                TradeSide::Buy => {
+                    lines.push(kv(
+                        "Cost",
+                        cost.map(money).unwrap_or_else(|| "—".into()),
+                        Color::White,
+                    ));
+                    if let (Some(c), Some(s)) = (cost, size) {
+                        lines.push(kv("Max payout", money(s), GOLD));
+                        lines.push(Line::from(""));
+                        lines.push(won(s - c));
+                    }
+                }
+                TradeSide::Sell => {
+                    lines.push(kv(
+                        "Proceeds",
+                        cost.map(money).unwrap_or_else(|| "—".into()),
+                        GOOD,
+                    ));
+                }
+            }
+        }
+        _ => {}
+    }
+    f.render_widget(
+        Paragraph::new(lines)
+            .block(panel("Preview"))
+            .wrap(Wrap { trim: true }),
         area,
     );
 }
@@ -1810,38 +2060,23 @@ fn render_copy_modal(f: &mut Frame, m: &CopyModal) {
             CopyField::MirrorSells => if m.mirror_sells { "yes" } else { "no" }.to_string(),
         }
     };
-    let mut lines = vec![Line::from("Follow a wallet".bold()), Line::from("")];
+    let mut lines: Vec<Line> = Vec::new();
     for (i, field) in COPY_FIELDS.iter().enumerate() {
         lines.push(field_line(field.label(), &value(*field), m.focus == i));
     }
     lines.push(Line::from(""));
     lines.push(match &m.error {
-        Some(e) => Line::from(Span::styled(e.clone(), Style::default().fg(BAD))),
+        Some(e) => Line::from(Span::styled(format!("✗ {e}"), Style::default().fg(BAD))),
         None => Line::from("Mirrors the wallet's new trades with your own size.".fg(DIM)),
     });
     lines.push(Line::from(
         "↑↓ move · space toggles mirror · Enter follow · Esc cancel".fg(DIM),
     ));
-
-    let height = (lines.len() as u16 + 2).clamp(14, f.area().height.saturating_sub(2));
-    let area = centered_rect(60, height, f.area());
-    f.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" FOLLOW WALLET ".bold())
-        .border_style(Style::default().fg(ACCENT));
-    f.render_widget(
-        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
-        area,
-    );
+    popup(f, 60, "FOLLOW WALLET", ACCENT, lines);
 }
 
 fn render_reset_modal(f: &mut Frame, m: &ResetModal) {
-    let area = centered_rect(56, 12, f.area());
-    f.render_widget(Clear, area);
     let lines = vec![
-        Line::from("Reset paper account".bold()),
-        Line::from(""),
         Line::from(
             "Wipes cash, positions, open orders, and trade history, then starts fresh.".fg(DIM),
         ),
@@ -1849,47 +2084,29 @@ fn render_reset_modal(f: &mut Frame, m: &ResetModal) {
         field_line("Starting balance ($)", &m.balance, true),
         Line::from(""),
         match &m.error {
-            Some(e) => Line::from(Span::styled(e.clone(), Style::default().fg(BAD))),
+            Some(e) => Line::from(Span::styled(format!("✗ {e}"), Style::default().fg(BAD))),
             None => {
                 Line::from("Guards and copy-trades are kept; only the account is reset.".fg(DIM))
             }
         },
         Line::from("Enter confirm · Esc cancel".fg(DIM)),
     ];
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" RESET PAPER ACCOUNT ".bold())
-        .border_style(Style::default().fg(GOLD));
-    f.render_widget(
-        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
-        area,
-    );
+    popup(f, 58, "RESET PAPER ACCOUNT", GOLD, lines);
 }
 
 fn render_settings_modal(f: &mut Frame, m: &SettingsEditModal) {
-    let area = centered_rect(56, 11, f.area());
-    f.render_widget(Clear, area);
     let lines = vec![
-        Line::from("Edit setting".bold()),
-        Line::from(""),
         field_line(m.field.label(), &m.input, true),
         Line::from(""),
         match &m.error {
-            Some(e) => Line::from(Span::styled(e.clone(), Style::default().fg(BAD))),
+            Some(e) => Line::from(Span::styled(format!("✗ {e}"), Style::default().fg(BAD))),
             None => {
                 Line::from("Lists are comma separated. Blank turns optional values off.".fg(DIM))
             }
         },
         Line::from("Enter save · Esc cancel".fg(DIM)),
     ];
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" EDIT SETTING ".bold())
-        .border_style(Style::default().fg(ACCENT));
-    f.render_widget(
-        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
-        area,
-    );
+    popup(f, 58, "EDIT SETTING", ACCENT, lines);
 }
 
 // --- Shared widgets / helpers ---------------------------------------------
@@ -1907,6 +2124,7 @@ fn metric_card(f: &mut Frame, area: Rect, label: &str, value: &str, color: Color
         Paragraph::new(lines).alignment(Alignment::Center).block(
             Block::default()
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(color)),
         ),
         area,
@@ -1916,11 +2134,46 @@ fn metric_card(f: &mut Frame, area: Rect, label: &str, value: &str, color: Color
 fn panel(title: &str) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(PANEL))
         .title(Span::styled(
             format!(" {title} "),
             Style::default().fg(HEADER).bold(),
         ))
+}
+
+/// One look for every popup: rounded border in the accent colour, a coloured
+/// title, and breathing room inside (1 col padding, 1 row top/bottom).
+fn modal_block(title: &str, color: Color) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(color))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default().fg(color).bold(),
+        ))
+        .padding(Padding::new(2, 2, 1, 1))
+}
+
+/// Center, clear, and draw a modal sized to its content. Single code path so
+/// every popup lines up the same way. ponytail: one helper kills five copies.
+fn popup(f: &mut Frame, width: u16, title: &str, color: Color, lines: Vec<Line>) {
+    // Count wrapped rows so long help text never clips the footer.
+    let inner = width.saturating_sub(6).max(1); // 1 border + 2 padding each side
+    let rows: u16 = lines
+        .iter()
+        .map(|l| (l.width() as u16).div_ceil(inner).max(1))
+        .sum();
+    let height = (rows + 4).min(f.area().height); // + border + vertical padding
+    let area = centered_rect(width, height, f.area());
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines)
+            .block(modal_block(title, color))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
 }
 
 fn header_row(cells: &[&str]) -> Row<'static> {
@@ -2012,17 +2265,23 @@ fn data_loading(app: &App) -> bool {
     app.data.lock().unwrap().last_refresh.is_none()
 }
 
-const LOADING: &str = "loading…";
+/// Animated "loading" placeholder. Pure row-builders can't see `app.frame`, so
+/// they read the per-render frame mirror set in [`render`].
+/// ponytail: one atomic beats threading `frame` through a dozen call sites.
+fn loading_anim() -> String {
+    let frame = FRAME.load(std::sync::atomic::Ordering::Relaxed);
+    format!("{} loading", spinner(frame))
+}
 
-/// Money that isn't trustworthy until quotes load: "loading…" while loading.
-fn loading_money(v: Decimal, loading: bool) -> String {
-    if loading { LOADING.into() } else { money(v) }
+/// Money that isn't trustworthy until quotes load: animated dots while loading.
+fn loading_money(v: Decimal, is_loading: bool) -> String {
+    if is_loading { loading_anim() } else { money(v) }
 }
 
 /// Signed money gated on the first quote refresh (see [`loading_money`]).
-fn loading_signed(v: Decimal, loading: bool) -> String {
-    if loading {
-        LOADING.into()
+fn loading_signed(v: Decimal, is_loading: bool) -> String {
+    if is_loading {
+        loading_anim()
     } else {
         signed_money(v)
     }
@@ -2232,6 +2491,36 @@ mod stats_tests {
         assert_eq!(s.avg_loss, dec!(-20));
         assert_eq!(s.profit_factor, Some(dec!(1.5)));
         assert_eq!(s.expectancy, dec!(2.5));
+    }
+
+    #[test]
+    fn prob_bar_scales_with_probability() {
+        assert_eq!(prob_count(dec!(0), 14), 0);
+        assert_eq!(prob_count(dec!(1), 14), 14);
+        assert_eq!(prob_count(dec!(0.5), 14), 7);
+        assert!(prob_count(dec!(0.05), 14) < prob_count(dec!(0.92), 14));
+    }
+
+    #[test]
+    fn popup_draws_rounded_frame_and_title() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut t = Terminal::new(TestBackend::new(70, 14)).unwrap();
+        let m = ResetModal {
+            balance: "10000".into(),
+            error: None,
+        };
+        t.draw(|f| render_reset_modal(f, &m)).unwrap();
+        let buf = t.backend().buffer().clone();
+        let mut text = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                text.push_str(buf[(x, y)].symbol());
+            }
+        }
+        assert!(text.contains('╭'), "rounded corner missing");
+        assert!(text.contains("RESET PAPER ACCOUNT"), "title missing");
+        assert!(text.contains("Esc cancel"), "footer clipped");
     }
 
     #[test]

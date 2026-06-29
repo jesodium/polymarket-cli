@@ -362,6 +362,8 @@ pub(crate) struct App {
     pub update_available: Option<String>,
     /// Set by the `U` key; causes `tui::run` to execute the upgrade after exit.
     pub run_upgrade: bool,
+    /// Monotonic frame counter driving UI animations (spinners, matrix rain).
+    pub frame: u64,
 }
 
 impl App {
@@ -431,12 +433,14 @@ impl App {
             attempted_redeems: HashSet::new(),
             update_available,
             run_upgrade: false,
+            frame: 0,
         }
     }
 
     /// Per-frame housekeeping: refresh the watch set and surface any async
     /// notices (e.g. live-order results) in the status line.
     pub fn pre_frame(&mut self) {
+        self.frame = self.frame.wrapping_add(1);
         self.sync_watch();
         let notice = self.data.lock().unwrap().notices.pop();
         if let Some(n) = notice {
