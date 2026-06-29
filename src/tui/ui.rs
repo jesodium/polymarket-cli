@@ -266,10 +266,6 @@ fn dashboard(f: &mut Frame, app: &App, area: Rect) {
     // Only shown once equity snapshots have accumulated (hidden for accounts
     // predating equity snapshotting).
     if let Some(eq) = equity_stats {
-        info.push(kv_line(
-            "Max Drawdown",
-            &format!("{}%", eq.max_drawdown_pct),
-        ));
         if let Some(sh) = eq.sharpe {
             info.push(kv_line("Sharpe", &sh.to_string()));
         }
@@ -2102,12 +2098,11 @@ fn trade_stats(acct: &crate::paper::types::PaperAccount) -> TradeStats {
     }
 }
 
-/// Sharpe (sample, per-snapshot, unitless) and max drawdown (%) over the
-/// persisted equity curve. Returns `None` until enough samples accumulate, so
-/// accounts predating equity snapshotting show nothing.
+/// Sharpe (sample, per-snapshot, unitless) over the persisted equity curve.
+/// Returns `None` until enough samples accumulate, so accounts predating
+/// equity snapshotting show nothing.
 struct EquityMetrics {
     sharpe: Option<Decimal>,
-    max_drawdown_pct: Decimal,
 }
 
 fn equity_metrics(curve: &[(chrono::DateTime<chrono::Utc>, Decimal)]) -> Option<EquityMetrics> {
@@ -2132,20 +2127,7 @@ fn equity_metrics(curve: &[(chrono::DateTime<chrono::Utc>, Decimal)]) -> Option<
         let sd = var.sqrt();
         (sd > 0.0).then(|| Decimal::try_from(mean / sd).unwrap_or_default().round_dp(2))
     };
-    let mut peak = eq[0];
-    let mut max_dd = 0.0_f64;
-    for &e in &eq {
-        peak = peak.max(e);
-        if peak > 0.0 {
-            max_dd = max_dd.max((peak - e) / peak);
-        }
-    }
-    Some(EquityMetrics {
-        sharpe,
-        max_drawdown_pct: Decimal::try_from(max_dd * 100.0)
-            .unwrap_or_default()
-            .round_dp(1),
-    })
+    Some(EquityMetrics { sharpe })
 }
 
 fn pnl_color(v: Decimal) -> Color {
@@ -2270,15 +2252,4 @@ mod stats_tests {
         assert!(equity_metrics(&short).is_none());
     }
 
-    #[test]
-    fn equity_metrics_drawdown() {
-        let now = chrono::Utc::now();
-        // Up to 1100 (peak), down to 990 → drawdown = (1100-990)/1100 = 10%.
-        let vals = [
-            1000, 1010, 1020, 1050, 1080, 1100, 1090, 1050, 1010, 1000, 990,
-        ];
-        let curve: Vec<_> = vals.iter().map(|&v| (now, Decimal::from(v))).collect();
-        let m = equity_metrics(&curve).unwrap();
-        assert_eq!(m.max_drawdown_pct, dec!(10.0));
-    }
 }

@@ -25,3 +25,5 @@ e2e-*.log
 scripts/e2e.sh
 
 .claude
+
+/misc/
