@@ -7,6 +7,22 @@ tags. The section matching a release tag is published as that release's notes
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-06-29
+
+### Added
+- Market-detail price-history view: stacked tug-of-war bars showing the
+  focused outcome vs. the opposing side over time, with a selectable timeframe
+  (`t` cycles 5m / 30m / 1h / 1d). `←→` switches which outcome is charted.
+- TUI wallet configuration on the Settings tab (live mode): set a proxy/funder
+  address override (`x`) and cycle the signature type (`y`, eoa → proxy →
+  gnosis-safe). These fix the CLOB "maker address not allowed" error for
+  accounts created on polymarket.com whose proxy differs from the derived one.
+
+### Changed
+- Wallet panel now shows the *effective* trading address, honoring a proxy
+  override and the gnosis-safe signature type instead of only the derived
+  proxy.
+
 ## [0.1.10] - 2026-06-28
 
 ### Added

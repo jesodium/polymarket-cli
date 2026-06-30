@@ -10,9 +10,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
-use polymarket_client_sdk_v2::clob::types::request::OrderBookSummaryRequest;
+use polymarket_client_sdk_v2::clob::types::request::{
+    OrderBookSummaryRequest, PriceHistoryRequest,
+};
+use polymarket_client_sdk_v2::clob::types::{Interval, TimeRange};
 use polymarket_client_sdk_v2::gamma;
 use polymarket_client_sdk_v2::types::{Address, Decimal};
+use rust_decimal::prelude::ToPrimitive;
 
 use super::live;
 use crate::guard::{self, GuardAction};
@@ -63,6 +67,26 @@ pub(crate) struct ResolutionInfo {
     pub outcome_count: usize,
 }
 
+/// Price-history timeframes offered in the market-detail chart. Each is a
+/// (label, lookback range, point spacing in minutes) tuple; the index into
+/// this table is what the UI cycles with `t`.
+pub(crate) const DETAIL_TIMEFRAMES: [(&str, Interval, u32); 4] = [
+    ("5m", Interval::SixHours, 5),
+    ("30m", Interval::OneDay, 30),
+    ("1h", Interval::OneWeek, 60),
+    ("1d", Interval::Max, 1440),
+];
+
+/// Focused outcome's price over time, for the market-detail chart. Keyed by
+/// token + timeframe so the UI can tell a fresh series from a stale one.
+#[derive(Clone, Debug)]
+pub(crate) struct PriceHistory {
+    pub token: String,
+    pub timeframe: usize,
+    /// (unix seconds, price 0..1), oldest first.
+    pub points: Vec<(f64, f64)>,
+}
+
 #[derive(Default)]
 pub(crate) struct SharedData {
     pub markets: Vec<MarketRow>,
@@ -83,6 +107,8 @@ pub(crate) struct SharedData {
     /// (so the UI can tell fresh results from a stale/in-flight query).
     pub search_results: Vec<MarketRow>,
     pub search_results_query: String,
+    /// Most recent price-history series for the open market-detail outcome.
+    pub price_history: Option<PriceHistory>,
 }
 
 impl SharedData {
@@ -490,6 +516,40 @@ pub(crate) async fn search_markets(query: &str) -> Vec<MarketRow> {
         .flat_map(|e| e.markets.unwrap_or_default())
         .filter_map(to_market_row)
         .collect()
+}
+
+/// Kick off a background fetch of the focused outcome's price history at the
+/// given timeframe; the series lands in `price_history` keyed by token +
+/// timeframe so the UI shows it once it matches the focused outcome.
+pub(crate) fn run_price_history(shared: Shared, token: String, timeframe: usize) {
+    let Some(&(_, interval, fidelity)) = DETAIL_TIMEFRAMES.get(timeframe) else {
+        return;
+    };
+    tokio::spawn(async move {
+        let Ok(market) = quotes::parse_token_id(&token) else {
+            return;
+        };
+        let Ok(client) = crate::auth::unauthenticated_clob_client() else {
+            return;
+        };
+        let request = PriceHistoryRequest::builder()
+            .market(market)
+            .time_range(TimeRange::from_interval(interval))
+            .fidelity(fidelity)
+            .build();
+        if let Ok(resp) = client.price_history(&request).await {
+            let points = resp
+                .history
+                .iter()
+                .map(|p| (p.t as f64, p.p.to_f64().unwrap_or(0.0)))
+                .collect();
+            shared.lock().unwrap().price_history = Some(PriceHistory {
+                token,
+                timeframe,
+                points,
+            });
+        }
+    });
 }
 
 /// Kick off a background search; results land in `search_results` keyed by the

@@ -43,18 +43,25 @@ pub(crate) fn wallet_info() -> Option<WalletInfo> {
     let key = key?;
     let signer = LocalSigner::from_str(&key).ok()?;
     let eoa = signer.address();
-    let proxy = derive_proxy_wallet(eoa, POLYGON);
+    let derived = derive_proxy_wallet(eoa, POLYGON).map(|a| a.to_string());
     let signature_type = config::resolve_signature_type(None).unwrap_or_else(|_| "proxy".into());
-    let trading = if signature_type == "proxy" {
-        proxy
-            .map(|a| a.to_string())
-            .unwrap_or_else(|| eoa.to_string())
+    // Proxy/gnosis sig types trade through a proxy; a manual override (set on
+    // the Settings tab) wins over the CREATE2-derived address. EOA trades
+    // directly from the signer.
+    let is_proxy_sig = signature_type == "proxy" || signature_type == "gnosis-safe";
+    let override_proxy = config::resolve_proxy_address().ok().flatten();
+    let proxy = if is_proxy_sig {
+        override_proxy.clone().or_else(|| derived.clone())
     } else {
-        eoa.to_string()
+        derived.clone()
+    };
+    let trading = match (is_proxy_sig, &proxy) {
+        (true, Some(p)) => p.clone(),
+        _ => eoa.to_string(),
     };
     Some(WalletInfo {
         eoa: eoa.to_string(),
-        proxy: proxy.map(|a| a.to_string()),
+        proxy,
         trading,
         signature_type,
         private_key: Some(key),

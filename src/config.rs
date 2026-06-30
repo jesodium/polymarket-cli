@@ -133,6 +133,14 @@ pub fn set_proxy_address(proxy: Option<&str>) -> Result<()> {
     write_config(&config)
 }
 
+/// Set the signature type in the config file, preserving the rest of the
+/// wallet config. Errors if no wallet exists.
+pub fn set_signature_type(signature_type: &str) -> Result<()> {
+    let mut config = load_config()?.ok_or_else(|| anyhow::anyhow!("{}", NO_WALLET_MSG))?;
+    config.signature_type = signature_type.to_string();
+    write_config(&config)
+}
+
 /// Write the wallet config to disk with owner-only permissions.
 fn write_config(config: &Config) -> Result<()> {
     let dir = config_dir()?;

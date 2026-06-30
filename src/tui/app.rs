@@ -307,6 +307,8 @@ pub(crate) struct WalletActionModal {
 pub(crate) enum WalletAction {
     Create,
     Import,
+    /// Set the proxy/funder address override (fixes "maker address not allowed").
+    SetProxy,
 }
 
 pub(crate) struct App {
@@ -342,6 +344,8 @@ pub(crate) struct App {
     pub detail_token: usize,
     /// Vertical scroll offset for the market-detail left panel (rules text).
     pub detail_scroll: u16,
+    /// Index into [`super::data::DETAIL_TIMEFRAMES`] for the price-history chart.
+    pub detail_timeframe: usize,
 
     pub modal: Option<OrderModal>,
     /// Follow-wallet form (Copytrade tab → `n`).
@@ -423,6 +427,7 @@ impl App {
             detail: None,
             detail_scroll: 0,
             detail_token: 0,
+            detail_timeframe: 0,
             modal: None,
             copy_modal: None,
             reset_modal: None,
@@ -609,6 +614,7 @@ impl App {
             KeyCode::Left | KeyCode::Char('h') if self.view == View::MarketDetail => {
                 if self.detail_token > 0 {
                     self.detail_token -= 1;
+                    self.request_price_history();
                 }
             }
             KeyCode::Right | KeyCode::Char('l') if self.view == View::MarketDetail => {
@@ -616,7 +622,14 @@ impl App {
                     && self.detail_token + 1 < d.token_ids.len()
                 {
                     self.detail_token += 1;
+                    self.request_price_history();
                 }
+            }
+            // Cycle the price-history chart timeframe (5m / 30m / 1h / 1d).
+            KeyCode::Char('t') if self.view == View::MarketDetail => {
+                self.detail_timeframe =
+                    (self.detail_timeframe + 1) % super::data::DETAIL_TIMEFRAMES.len();
+                self.request_price_history();
             }
             KeyCode::Char('b') if self.view == View::MarketDetail => {
                 self.open_modal(TradeSide::Buy)
@@ -731,6 +744,32 @@ impl App {
                     confirmed: false,
                 });
             }
+            // Settings: set the proxy/funder address override (fixes the CLOB
+            // "maker address not allowed" error for web-created accounts).
+            KeyCode::Char('x') if self.view == View::Settings && self.live => {
+                if self.wallet.is_some() {
+                    let prefill = config::resolve_proxy_address()
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    self.wallet_action_modal = Some(WalletActionModal {
+                        action: WalletAction::SetProxy,
+                        import_key: prefill,
+                        error: None,
+                        confirmed: false,
+                    });
+                } else {
+                    self.status = "Configure a wallet first (n or m).".into();
+                }
+            }
+            // Settings: cycle the signature type (eoa → proxy → gnosis-safe).
+            KeyCode::Char('y') if self.view == View::Settings && self.live => {
+                if self.wallet.is_some() {
+                    self.cycle_signature_type();
+                } else {
+                    self.status = "Configure a wallet first (n or m).".into();
+                }
+            }
             // Settings: reset the paper account.
             KeyCode::Char('r') if self.view == View::Settings => {
                 if self.live {
@@ -823,6 +862,20 @@ impl App {
         }
     }
 
+    /// Ask the background loop to fetch price history for the focused outcome
+    /// at the current timeframe.
+    fn request_price_history(&self) {
+        let Some(d) = &self.detail else { return };
+        let Some(token) = d.token_ids.get(self.detail_token) else {
+            return;
+        };
+        super::data::run_price_history(
+            Arc::clone(&self.data),
+            token.clone(),
+            self.detail_timeframe,
+        );
+    }
+
     fn activate(&mut self) {
         match self.view {
             View::Markets => {
@@ -833,6 +886,7 @@ impl App {
                     self.detail_scroll = 0;
                     self.view = View::MarketDetail;
                     self.status = format!("Opened: {}", row.question);
+                    self.request_price_history();
                 }
             }
             View::Settings => self.activate_setting(),
@@ -1941,6 +1995,48 @@ impl App {
         }
     }
 
+    /// Re-read the wallet config from disk into `self.wallet` so the Settings
+    /// panel reflects a just-changed proxy override or signature type.
+    fn reload_wallet(&mut self) {
+        self.wallet = super::live::wallet_info();
+    }
+
+    /// Save a new proxy/funder override (or clear it when blank) and refresh the
+    /// panel. Returns an error string on bad input.
+    fn save_proxy_override(&mut self, input: &str) -> Result<(), String> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            config::set_proxy_address(None).map_err(|e| e.to_string())?;
+            self.reload_wallet();
+            self.status = "Proxy override cleared — using the derived address.".into();
+            return Ok(());
+        }
+        let checksummed = alloy::primitives::Address::from_str(trimmed)
+            .map_err(|_| "Invalid address — expected 0x… (40 hex chars).".to_string())?
+            .to_string();
+        config::set_proxy_address(Some(&checksummed)).map_err(|e| e.to_string())?;
+        self.reload_wallet();
+        self.status = format!("Proxy set to {checksummed}. Trades now route through it.");
+        Ok(())
+    }
+
+    /// Cycle eoa → proxy → gnosis-safe and persist, refreshing the panel.
+    fn cycle_signature_type(&mut self) {
+        let current = config::resolve_signature_type(None).unwrap_or_else(|_| "proxy".into());
+        let next = match current.as_str() {
+            "eoa" => "proxy",
+            "proxy" => "gnosis-safe",
+            _ => "eoa",
+        };
+        match config::set_signature_type(next) {
+            Ok(()) => {
+                self.reload_wallet();
+                self.status = format!("Signature type → {next}.");
+            }
+            Err(e) => self.status = format!("Failed to set signature type: {e}"),
+        }
+    }
+
     fn execute_create_wallet(&mut self) {
         let signer = LocalSigner::random().with_chain_id(Some(POLYGON));
         let address = signer.address();
@@ -2060,6 +2156,29 @@ impl App {
                     }
                     self.execute_import_wallet(&key);
                     self.wallet_action_modal = None;
+                }
+                _ => {}
+            },
+            WalletAction::SetProxy => match key.code {
+                KeyCode::Esc => {
+                    self.wallet_action_modal = None;
+                }
+                KeyCode::Backspace => {
+                    m.import_key.pop();
+                }
+                KeyCode::Char(c) => {
+                    m.import_key.push(c);
+                }
+                KeyCode::Enter => {
+                    let input = m.import_key.clone();
+                    match self.save_proxy_override(&input) {
+                        Ok(()) => self.wallet_action_modal = None,
+                        Err(e) => {
+                            if let Some(m) = self.wallet_action_modal.as_mut() {
+                                m.error = Some(e);
+                            }
+                        }
+                    }
                 }
                 _ => {}
             },

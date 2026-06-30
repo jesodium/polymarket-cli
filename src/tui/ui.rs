@@ -233,7 +233,7 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
 fn render_status(f: &mut Frame, app: &App, area: Rect) {
     let help = match app.view {
         View::Markets => "↑↓/jk move · Enter open · / search · Tab views · q quit",
-        View::MarketDetail => "←→ outcome · ↑↓ scroll · b buy · s sell · Esc back",
+        View::MarketDetail => "←→ outcome · t timeframe · ↑↓ scroll · b buy · s sell · Esc back",
         View::Positions => "↑↓ move · b buy · s sell · r redeem resolved · Tab views",
         View::Orders => "↑↓ move · c cancel · Tab views",
         View::Copytrade => {
@@ -489,6 +489,7 @@ fn market_detail(f: &mut Frame, app: &App, area: Rect) {
         .constraints([
             Constraint::Length(4),     // header
             Constraint::Length(n + 2), // outcomes
+            Constraint::Length(11),    // price-history chart
             Constraint::Min(4),        // rules
         ])
         .split(cols[0]);
@@ -558,6 +559,14 @@ fn market_detail(f: &mut Frame, app: &App, area: Rect) {
         left[1],
     );
 
+    // Price history of the focused outcome, at the chosen timeframe (t cycles).
+    let focused_name = d
+        .outcomes
+        .get(app.detail_token)
+        .cloned()
+        .unwrap_or_else(|| format!("Outcome {}", app.detail_token + 1));
+    render_price_chart(f, app, &focused_name, left[2]);
+
     // Resolution rules (scrollable).
     let rules: Vec<Line> = match d.description.as_deref().filter(|s| !s.is_empty()) {
         Some(text) => text.lines().map(|l| Line::from(l.to_string())).collect(),
@@ -568,7 +577,7 @@ fn market_detail(f: &mut Frame, app: &App, area: Rect) {
             .block(panel("Resolution ↑↓ scroll"))
             .wrap(Wrap { trim: false })
             .scroll((app.detail_scroll, 0)),
-        left[2],
+        left[3],
     );
 
     // Right: order book for focused token + position.
@@ -583,6 +592,107 @@ fn market_detail(f: &mut Frame, app: &App, area: Rect) {
         .split(cols[1]);
     render_book(f, app, &token, right[0]);
     render_position_box(f, app, &token, right[1]);
+}
+
+/// Tug-of-war bars: one row per time bucket, each split between the focused
+/// outcome (left, green) and the opposing side (right, gold) so the boundary
+/// shows who's winning and how the fight shifted over time. The series is
+/// fetched in the background keyed by token + timeframe; until the fresh one
+/// lands we show a placeholder rather than a stale picture.
+fn render_price_chart(f: &mut Frame, app: &App, outcome: &str, area: Rect) {
+    use super::data::DETAIL_TIMEFRAMES;
+
+    let focused_token = app
+        .detail
+        .as_ref()
+        .and_then(|d| d.token_ids.get(app.detail_token))
+        .cloned()
+        .unwrap_or_default();
+    // The opposing side: the other outcome in a binary market, else "rest".
+    let opponent = app
+        .detail
+        .as_ref()
+        .filter(|d| d.outcomes.len() == 2)
+        .map(|d| d.outcomes[1 - app.detail_token.min(1)].clone())
+        .unwrap_or_else(|| "rest".to_string());
+
+    // Title: the matchup + the timeframe selector with the active one lit.
+    let mut title: Vec<Span> = vec![
+        Span::styled(
+            format!(" {} ", truncate(outcome, 12)),
+            Style::default().fg(GOOD).bold(),
+        ),
+        Span::styled("vs ", Style::default().fg(DIM)),
+        Span::styled(
+            format!("{} ", truncate(&opponent, 12)),
+            Style::default().fg(GOLD).bold(),
+        ),
+        Span::styled("· t ", Style::default().fg(DIM)),
+    ];
+    for (i, (label, _, _)) in DETAIL_TIMEFRAMES.iter().enumerate() {
+        let style = if i == app.detail_timeframe {
+            Style::default().fg(ACCENT).bold()
+        } else {
+            Style::default().fg(DIM)
+        };
+        title.push(Span::styled(format!("{label} "), style));
+    }
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(PANEL))
+        .title(Line::from(title));
+
+    let data = app.data.lock().unwrap();
+    let points: Vec<(f64, f64)> = match data.price_history.as_ref() {
+        Some(ph) if ph.token == focused_token && ph.timeframe == app.detail_timeframe => {
+            ph.points.clone()
+        }
+        _ => Vec::new(),
+    };
+    drop(data);
+
+    if points.len() < 2 {
+        f.render_widget(
+            Paragraph::new("loading price history…".fg(DIM)).block(block),
+            area,
+        );
+        return;
+    }
+
+    // One bar per usable text row; downsample the series evenly to fit. Time
+    // flows top (oldest) → bottom (latest).
+    let rows = area.height.saturating_sub(2).max(1) as usize;
+    let inner_w = area.width.saturating_sub(2) as usize;
+    // Reserve "HH:MM " label (6) and " 63%" readout (5); the rest is the bar.
+    let bar_w = inner_w.saturating_sub(11).max(4);
+
+    let n = points.len();
+    let take = rows.min(n);
+    let lines: Vec<Line> = (0..take)
+        .map(|i| {
+            // Evenly spaced sample indices across the whole series.
+            let idx = if take == 1 {
+                n - 1
+            } else {
+                i * (n - 1) / (take - 1)
+            };
+            let (t, p) = points[idx];
+            let p = p.clamp(0.0, 1.0);
+            let fill = (p * bar_w as f64).round() as usize;
+            let fill = fill.min(bar_w);
+            let time = chrono::DateTime::from_timestamp(t as i64, 0)
+                .map_or("--:--".to_string(), |dt| dt.format("%H:%M").to_string());
+            Line::from(vec![
+                Span::styled(format!("{time} "), Style::default().fg(DIM)),
+                Span::styled("█".repeat(fill), Style::default().fg(GOOD)),
+                Span::styled("█".repeat(bar_w - fill), Style::default().fg(GOLD)),
+                Span::styled(format!(" {:>3.0}%", p * 100.0), Style::default().fg(GOOD)),
+            ])
+        })
+        .collect();
+
+    f.render_widget(Paragraph::new(lines).block(block), area);
 }
 
 fn render_book(f: &mut Frame, app: &App, token: &str, area: Rect) {
@@ -1561,6 +1671,14 @@ fn render_wallet_panel(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(GOLD),
             )));
             lines.push(Line::from(Span::styled(
+                "x — Set proxy/funder address",
+                Style::default().fg(GOLD),
+            )));
+            lines.push(Line::from(Span::styled(
+                "y — Cycle signature type",
+                Style::default().fg(GOLD),
+            )));
+            lines.push(Line::from(Span::styled(
                 "o — Open profile in browser",
                 Style::default().fg(ACCENT),
             )));
@@ -1784,6 +1902,30 @@ fn render_wallet_action_modal(f: &mut Frame, m: &WalletActionModal) {
             }
             lines.push(Line::from("Enter to import · Esc to cancel".fg(DIM)));
             popup(f, 58, "IMPORT WALLET", ACCENT, lines);
+        }
+        WalletAction::SetProxy => {
+            let mut lines = vec![
+                Line::from(
+                    "Proxy/funder address — the wallet Polymarket shows on your profile.".fg(DIM),
+                ),
+                Line::from("Fixes \"maker address not allowed\". Leave blank to clear.".fg(DIM)),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Proxy address (0x…)",
+                    Style::default().fg(DIM),
+                )),
+                Line::from(format!("{}█", m.import_key)),
+                Line::from(""),
+            ];
+            if let Some(e) = &m.error {
+                lines.push(Line::from(Span::styled(
+                    format!("✗ {e}"),
+                    Style::default().fg(BAD),
+                )));
+                lines.push(Line::from(""));
+            }
+            lines.push(Line::from("Enter to save · Esc to cancel".fg(DIM)));
+            popup(f, 64, "SET PROXY ADDRESS", ACCENT, lines);
         }
     }
 }
