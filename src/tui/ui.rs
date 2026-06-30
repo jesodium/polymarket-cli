@@ -1159,30 +1159,35 @@ fn live_orders(f: &mut Frame, app: &App, area: Rect) {
 // --- History ---------------------------------------------------------------
 
 fn history(f: &mut Frame, app: &App, area: Rect) {
-    if app.live {
-        f.render_widget(
-            Paragraph::new(vec![
-                Line::from("Live trade history is recorded at the CLOB.".fg(GOLD)),
-                Line::from(""),
-                Line::from("View: polymarket clob trades".fg(DIM)),
-            ])
-            .block(panel("Position History · LIVE")),
-            area,
-        );
-        return;
-    }
-    let acct = app.account.lock().unwrap();
-    // Two views of the same trade log: every fill (the order log) and the
-    // subset that closed a position (carries a realized PnL).
-    let orders: Vec<_> = acct.trades.iter().rev().cloned().collect();
-    let closed: Vec<_> = acct
-        .trades
-        .iter()
-        .rev()
-        .filter(|t| t.realized_pnl.is_some())
-        .cloned()
-        .collect();
-    drop(acct);
+    // Top half = every fill (order log); bottom half = closed positions (carry a
+    // realized PnL). In live mode the fills come from the data /trades endpoint
+    // and the closed set from /closed-positions (hydrated into account.trades);
+    // in paper mode both come from the local trade log.
+    let (orders, closed): (Vec<Trade>, Vec<Trade>) = if app.live {
+        let fills = app.data.lock().unwrap().live_fills.clone();
+        let closed: Vec<_> = app
+            .account
+            .lock()
+            .unwrap()
+            .trades
+            .iter()
+            .rev()
+            .filter(|t| t.realized_pnl.is_some())
+            .cloned()
+            .collect();
+        (fills.into_iter().rev().collect(), closed)
+    } else {
+        let acct = app.account.lock().unwrap();
+        let orders: Vec<_> = acct.trades.iter().rev().cloned().collect();
+        let closed: Vec<_> = acct
+            .trades
+            .iter()
+            .rev()
+            .filter(|t| t.realized_pnl.is_some())
+            .cloned()
+            .collect();
+        (orders, closed)
+    };
 
     // Stack the order log on top of the closed-position history.
     let halves = Layout::default()
@@ -1531,14 +1536,91 @@ fn settings(f: &mut Frame, app: &App, area: Rect) {
     let right = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(8),
-            Constraint::Length(7),
-            Constraint::Length(9),
+            Constraint::Min(6),
+            Constraint::Length(6),
+            Constraint::Length(10),
+            Constraint::Length(8),
         ])
         .split(cols[1]);
     render_wallet_panel(f, app, right[0]);
     render_session_panel(f, app, right[1]);
-    render_mcp_panel(f, right[2]);
+    render_debug_panel(f, app, right[2]);
+    render_mcp_panel(f, right[3]);
+}
+
+/// Live-mode diagnostics: what the background refresher actually loaded into the
+/// account, plus per-endpoint fetch results/errors. Answers "why is everything 0".
+fn render_debug_panel(f: &mut Frame, app: &App, area: Rect) {
+    let (cash, positions, trades, realized) = {
+        let acct = app.account.lock().unwrap();
+        (
+            acct.cash,
+            acct.positions.len(),
+            acct.trades.len(),
+            engine::realized_pnl(&acct),
+        )
+    };
+    let (live_debug, profile) = {
+        let d = app.data.lock().unwrap();
+        (d.live_debug.clone(), d.live_profile.clone())
+    };
+
+    let mut lines = vec![Line::from(vec![
+        Span::styled(format!("{:<14}", "Mode"), Style::default().fg(DIM)),
+        Span::styled(
+            if app.live { "LIVE" } else { "PAPER" },
+            Style::default()
+                .fg(if app.live { GOOD } else { GOLD })
+                .bold(),
+        ),
+    ])];
+    if let Some(p) = &profile {
+        let name = if p.name.is_empty() { "—" } else { &p.name };
+        lines.push(kv_line(
+            "Username",
+            &format!("{name}{}", if p.verified { " ✓" } else { "" }),
+        ));
+        if !p.pseudonym.is_empty() {
+            lines.push(kv_line("Pseudonym", &p.pseudonym));
+        }
+        if !p.bio.is_empty() {
+            lines.push(kv_line("Bio", &p.bio));
+        }
+        if !p.x_username.is_empty() {
+            lines.push(kv_line("X", &format!("@{}", p.x_username)));
+        }
+        if let Some(c) = p.created_at {
+            lines.push(kv_line("Joined", &c.format("%Y-%m-%d").to_string()));
+        }
+    }
+    lines.extend([
+        kv_line(
+            "Trading addr",
+            app.wallet
+                .as_ref()
+                .map(|w| w.trading.as_str())
+                .unwrap_or("—"),
+        ),
+        kv_line("Cash", &money(cash)),
+        kv_line("Positions", &positions.to_string()),
+        kv_line("Closed trades", &trades.to_string()),
+        kv_line("Realized PnL", &signed_money(realized)),
+    ]);
+    if !live_debug.is_empty() {
+        lines.push(Line::from(""));
+        for l in live_debug.lines() {
+            lines.push(Line::from(l.to_string().fg(DIM)));
+        }
+    } else if app.live {
+        lines.push(Line::from(""));
+        lines.push(Line::from("(awaiting first refresh…)".fg(DIM)));
+    }
+    f.render_widget(
+        Paragraph::new(lines)
+            .block(panel("Debug — Account"))
+            .wrap(Wrap { trim: true }),
+        area,
+    );
 }
 
 /// Right-bottom panel: MCP server status, so you can see whether an AI client

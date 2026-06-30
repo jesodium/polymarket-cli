@@ -22,7 +22,7 @@ use super::live;
 use crate::guard::{self, GuardAction};
 use crate::paper::engine as paper_engine;
 use crate::paper::quotes;
-use crate::paper::types::{PaperAccount, TradeSide};
+use crate::paper::types::{PaperAccount, Trade, TradeSide};
 
 /// A market flattened to just what the UI needs.
 #[derive(Clone, Debug)]
@@ -109,6 +109,13 @@ pub(crate) struct SharedData {
     pub search_results_query: String,
     /// Most recent price-history series for the open market-detail outcome.
     pub price_history: Option<PriceHistory>,
+    /// Live-mode fetch diagnostics (address + per-endpoint result/error),
+    /// shown in the Settings → Debug panel.
+    pub live_debug: String,
+    /// Live-mode actual fills (buys + sells) for the History tab.
+    pub live_fills: Vec<Trade>,
+    /// Live-mode public profile (username, bio, X) for the Debug panel.
+    pub live_profile: Option<live::LiveProfile>,
 }
 
 impl SharedData {
@@ -141,13 +148,45 @@ pub(crate) async fn refresher(
     loop {
         // Slow cadence: market list, resolutions, balance, open orders (~15s).
         if market_ticks == 0 {
-            if let Some(_user) = live_user {
-                if let Ok(cash) = live::fetch_collateral().await {
-                    account.lock().unwrap().cash = cash;
+            if let Some(user) = live_user {
+                let mut dbg = format!("user = {user:#x}\n");
+                match live::fetch_collateral().await {
+                    Ok(cash) => {
+                        account.lock().unwrap().cash = cash;
+                        dbg += &format!("collateral: ${cash}\n");
+                    }
+                    Err(e) => dbg += &format!("collateral ERR: {e}\n"),
                 }
-                if let Ok(orders) = live::fetch_open_orders().await {
-                    shared.lock().unwrap().live_orders = orders;
+                match live::fetch_open_orders().await {
+                    Ok(orders) => {
+                        dbg += &format!("open orders: {}\n", orders.len());
+                        shared.lock().unwrap().live_orders = orders;
+                    }
+                    Err(e) => dbg += &format!("open orders ERR: {e}\n"),
                 }
+                // Closed-position history → realized-PnL stats on the dashboard.
+                match live::fetch_closed_trades(user).await {
+                    Ok(trades) => {
+                        dbg += &format!("closed trades: {}\n", trades.len());
+                        account.lock().unwrap().trades = trades;
+                    }
+                    Err(e) => dbg += &format!("closed trades ERR: {e}\n"),
+                }
+                // Actual fills → live History tab.
+                match live::fetch_fills(user).await {
+                    Ok(fills) => {
+                        dbg += &format!("fills: {}\n", fills.len());
+                        shared.lock().unwrap().live_fills = fills;
+                    }
+                    Err(e) => dbg += &format!("fills ERR: {e}\n"),
+                }
+                // Public profile → Debug panel.
+                match live::fetch_profile(user).await {
+                    Ok(profile) => shared.lock().unwrap().live_profile = Some(profile),
+                    Err(e) => dbg += &format!("profile ERR: {e}\n"),
+                }
+                dbg += &format!("updated: {}", Utc::now().format("%H:%M:%S"));
+                shared.lock().unwrap().live_debug = dbg;
             }
             match fetch_markets(&gamma).await {
                 Ok(rows) => {

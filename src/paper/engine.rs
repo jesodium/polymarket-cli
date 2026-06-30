@@ -418,11 +418,30 @@ pub(crate) fn portfolio_view(
 
     let reserved_cash = account.reserved_cash();
     let equity = account.cash + reserved_cash + positions_value;
+    let realized = realized_pnl(account);
     let roi_pct = if account.initial_balance > Decimal::ZERO {
+        // Paper: equity vs the fixed starting bankroll.
         ((equity - account.initial_balance) / account.initial_balance * Decimal::ONE_HUNDRED)
             .round_dp(2)
     } else {
-        Decimal::ZERO
+        // Live: no starting bankroll, so ROI = total PnL / total cost basis.
+        // Closed-trade entry cost = exit notional − realized; open = avg × size.
+        let closed_basis: Decimal = account
+            .trades
+            .iter()
+            .filter_map(|t| t.realized_pnl.map(|r| t.notional - r))
+            .sum();
+        let open_basis: Decimal = account
+            .positions
+            .values()
+            .map(|p| p.avg_price * p.size)
+            .sum();
+        let cost_basis = closed_basis + open_basis;
+        if cost_basis > Decimal::ZERO {
+            ((realized + unrealized) / cost_basis * Decimal::ONE_HUNDRED).round_dp(2)
+        } else {
+            Decimal::ZERO
+        }
     };
 
     PortfolioView {
@@ -431,7 +450,7 @@ pub(crate) fn portfolio_view(
         reserved_cash,
         positions_value,
         equity,
-        realized_pnl: realized_pnl(account),
+        realized_pnl: realized,
         unrealized_pnl: unrealized,
         roi_pct,
         open_orders: account.open_orders.len(),
