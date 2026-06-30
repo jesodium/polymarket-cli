@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use chrono::Utc;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -305,6 +306,26 @@ pub(crate) enum WalletAction {
     SetProxy,
 }
 
+/// Forced delay (seconds) before the final logout confirmation unlocks.
+pub(crate) const LOGOUT_DELAY_SECS: u64 = 5;
+
+/// Two-step logout guard: first Enter arms the timer, then the final Enter only
+/// works after [`LOGOUT_DELAY_SECS`] — so a key removal can't happen by mistake.
+pub(crate) struct LogoutModal {
+    /// `None` = first confirmation pending; `Some(t)` = armed at time `t`.
+    pub armed_at: Option<Instant>,
+}
+
+impl LogoutModal {
+    /// Seconds left on the unlock timer (0 once the final confirm is allowed).
+    pub fn remaining_secs(&self) -> u64 {
+        match self.armed_at {
+            Some(t) => LOGOUT_DELAY_SECS.saturating_sub(t.elapsed().as_secs()),
+            None => LOGOUT_DELAY_SECS,
+        }
+    }
+}
+
 pub(crate) struct App {
     pub view: View,
     pub should_quit: bool,
@@ -350,6 +371,8 @@ pub(crate) struct App {
     pub onboarding: Option<OnboardingState>,
     /// Create/import wallet modal from the Settings tab.
     pub wallet_action_modal: Option<WalletActionModal>,
+    /// Two-step logout confirmation (Settings tab → `L`).
+    pub logout_modal: Option<LogoutModal>,
     pub status: String,
     /// True in LIVE mode (real wallet + CLOB), false for the paper account.
     pub live: bool,
@@ -425,6 +448,7 @@ impl App {
             copy_modal: None,
             reset_modal: None,
             onboarding,
+            logout_modal: None,
             wallet_action_modal: None,
             status,
             live,
@@ -536,6 +560,11 @@ impl App {
         // Wallet action modal captures input.
         if self.wallet_action_modal.is_some() {
             self.wallet_action_modal_key(key);
+            return;
+        }
+        // Logout confirmation captures input.
+        if self.logout_modal.is_some() {
+            self.logout_modal_key(key);
             return;
         }
         // Order/copy/reset/settings modals capture all input.
@@ -741,6 +770,14 @@ impl App {
                     });
                 } else {
                     self.status = "Import a wallet first (m).".into();
+                }
+            }
+            // Settings: log out (remove the key from this machine).
+            KeyCode::Char('L') if self.view == View::Settings && self.live => {
+                if self.wallet.is_some() {
+                    self.logout_modal = Some(LogoutModal { armed_at: None });
+                } else {
+                    self.status = "No wallet to log out of.".into();
                 }
             }
             // Settings: cycle the signature type (eoa → proxy → gnosis-safe).
@@ -2047,6 +2084,47 @@ impl App {
     }
 }
 
+// --- Logout (Settings tab) -----------------------------------------------
+
+impl App {
+    fn logout_modal_key(&mut self, key: KeyEvent) {
+        let Some(m) = self.logout_modal.as_mut() else {
+            return;
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.logout_modal = None;
+                self.status = "Logout cancelled.".into();
+            }
+            KeyCode::Enter => match m.armed_at {
+                // First confirmation: arm the timer.
+                None => m.armed_at = Some(Instant::now()),
+                // Final confirmation: only fires once the timer has elapsed.
+                Some(_) if m.remaining_secs() == 0 => self.execute_logout(),
+                Some(_) => {} // still counting down; ignore
+            },
+            _ => {}
+        }
+    }
+
+    fn execute_logout(&mut self) {
+        self.logout_modal = None;
+        if let Err(e) = config::delete_config() {
+            self.status = format!("Logout failed: {e}");
+            return;
+        }
+        // Drop the in-memory wallet and return to the login screen.
+        self.wallet = None;
+        self.reveal_key = false;
+        self.onboarding = Some(OnboardingState {
+            import_key: String::new(),
+            error: None,
+        });
+        self.view = View::Onboarding;
+        self.status = "Logged out — key removed from this machine (keychain + config).".into();
+    }
+}
+
 // --- Wallet action modal (Settings tab) ---------------------------------
 
 /// Whether an import must pause for an overwrite confirmation before writing.
@@ -2276,6 +2354,27 @@ mod tests {
         assert_eq!(parse_opt_dec("  "), None);
         assert_eq!(parse_opt_dec("25"), Some(dec!(25)));
         assert_eq!(parse_opt_dec("-5"), None);
+    }
+
+    #[test]
+    fn logout_timer_gates_final_confirm() {
+        // Unarmed: shows the full delay, final confirm not yet possible.
+        let unarmed = LogoutModal { armed_at: None };
+        assert_eq!(unarmed.remaining_secs(), LOGOUT_DELAY_SECS);
+        // Just armed: still counting down (> 0 means Enter won't log out yet).
+        let fresh = LogoutModal {
+            armed_at: Some(Instant::now()),
+        };
+        assert!(fresh.remaining_secs() > 0);
+        // Armed in the past: timer elapsed, final confirm unlocked (0 remaining).
+        if let Some(past) =
+            Instant::now().checked_sub(std::time::Duration::from_secs(LOGOUT_DELAY_SECS + 1))
+        {
+            let elapsed = LogoutModal {
+                armed_at: Some(past),
+            };
+            assert_eq!(elapsed.remaining_secs(), 0);
+        }
     }
 
     #[test]

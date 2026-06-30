@@ -13,8 +13,8 @@ use ratatui::widgets::{
 };
 
 use super::app::{
-    App, COPY_FIELDS, CopyField, CopyModal, ModalField, OnboardingState, OrderModal, ResetModal,
-    SETTING_ROWS, SettingRow, SettingsEditModal, View, WalletAction, WalletActionModal,
+    App, COPY_FIELDS, CopyField, CopyModal, LogoutModal, ModalField, OnboardingState, OrderModal,
+    ResetModal, SETTING_ROWS, SettingRow, SettingsEditModal, View, WalletAction, WalletActionModal,
 };
 use super::data::ResolutionInfo;
 use crate::paper::engine;
@@ -140,6 +140,9 @@ pub(crate) fn render(f: &mut Frame, app: &App) {
     }
     if let Some(wam) = &app.wallet_action_modal {
         render_wallet_action_modal(f, wam);
+    }
+    if let Some(lm) = &app.logout_modal {
+        render_logout_modal(f, lm);
     }
 }
 
@@ -1687,6 +1690,10 @@ fn render_wallet_panel(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(GOLD),
             )));
             lines.push(Line::from(Span::styled(
+                "L — Log out (remove key from this machine)",
+                Style::default().fg(BAD),
+            )));
+            lines.push(Line::from(Span::styled(
                 "o — Open profile in browser",
                 Style::default().fg(ACCENT),
             )));
@@ -1840,6 +1847,45 @@ fn render_onboarding(f: &mut Frame, state: &OnboardingState) {
         Paragraph::new(lines).alignment(Alignment::Center),
         chunks[1],
     );
+}
+
+// --- Logout modal (Settings tab) -----------------------------------------
+
+fn render_logout_modal(f: &mut Frame, m: &LogoutModal) {
+    let mut lines = Vec::new();
+    match m.armed_at {
+        None => {
+            lines.push(Line::from("Log out of this machine?".fg(BAD).bold()));
+            lines.push(Line::from(""));
+            lines.push(Line::from(
+                "This removes your private key from the OS keychain and config".fg(DIM),
+            ));
+            lines.push(Line::from(
+                "file. You'll need to paste it again to trade here.".fg(DIM),
+            ));
+            lines.push(Line::from(""));
+            lines.push(Line::from("Enter to continue · Esc to cancel".fg(DIM)));
+        }
+        Some(_) => {
+            let remaining = m.remaining_secs();
+            lines.push(Line::from("FINAL confirmation".fg(BAD).bold()));
+            lines.push(Line::from(""));
+            lines.push(Line::from(
+                "Make sure you have your key backed up elsewhere.".fg(DIM),
+            ));
+            lines.push(Line::from(""));
+            if remaining > 0 {
+                lines.push(Line::from(
+                    format!("Confirm unlocks in {remaining}s…").fg(DIM),
+                ));
+            } else {
+                lines.push(Line::from(
+                    "Press Enter to LOG OUT · Esc to cancel".fg(BAD).bold(),
+                ));
+            }
+        }
+    }
+    popup(f, 60, "LOG OUT", BAD, lines);
 }
 
 // --- Wallet action modal (Settings tab) ----------------------------------
