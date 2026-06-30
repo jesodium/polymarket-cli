@@ -236,6 +236,19 @@ fn cmd_show(output: OutputFormat, private_key_flag: Option<&str>) -> Result<()> 
             println!("Signature type: {sig_type}");
             println!("Config path:    {}", config_path.display());
             println!("Key source:     {}", source.label());
+
+            // Proxy accounts: the derived address is counterfactual and usually
+            // differs from the one shown in the Polymarket web app. Sending tokens
+            // straight to it is the most common way people lose access to funds
+            // (issues #27/#28/#49). Warn unless the user has pinned their real
+            // proxy with `wallet set-proxy`.
+            if sig_type == "proxy" && proxy_source == "derived" && proxy_addr.is_some() {
+                println!();
+                println!("NOTE: This proxy address is derived by the CLI and may NOT match the");
+                println!("      address shown in the Polymarket web app. Do not send tokens");
+                println!("      directly to it — fund your account through the official deposit");
+                println!("      flow. If your web proxy differs, pin it with `wallet set-proxy`.");
+            }
         }
     }
     Ok(())
