@@ -259,7 +259,7 @@ fn initialize_result(requested: Option<&str>) -> Value {
         "protocolVersion": negotiate_version(requested),
         "capabilities": {"tools": {}},
         "serverInfo": {
-            "name": "polymarket-cli",
+            "name": "fiberglass",
             "version": env!("CARGO_PKG_VERSION"),
         },
     })

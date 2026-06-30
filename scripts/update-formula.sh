@@ -7,7 +7,7 @@ set -euo pipefail
 TAG="${1:?Usage: $0 <version-tag>  (e.g. v0.1.0)}"
 VERSION="${TAG#v}"  # strip leading 'v'
 
-REPO="jesodium/polymarket-cli"
+REPO="jesodium/fiberglass"
 FORMULA="Formula/polymarket.rb"
 
 echo "Fetching checksums for ${TAG}..."

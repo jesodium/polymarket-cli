@@ -1,11 +1,11 @@
 [package]
-name = "polymarket-cli"
-version = "0.1.11"
+name = "fiberglass"
+version = "0.1.12"
 edition = "2024"
 rust-version = "1.88.0"
-description = "CLI for Polymarket — browse markets, trade, and manage positions"
+description = "Fiberglass — a trading terminal for Polymarket: browse markets, trade, and manage positions"
 license = "MIT"
-repository = "https://github.com/jesodium/polymarket-cli"
+repository = "https://github.com/jesodium/fiberglass"
 keywords = ["polymarket", "prediction-markets", "trading", "cli"]
 categories = ["command-line-utilities"]
 

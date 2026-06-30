@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
-const REPO: &str = "jesodium/polymarket-cli";
+const REPO: &str = "jesodium/fiberglass";
 const CACHE_TTL: Duration = Duration::from_secs(24 * 3600);
 
 #[derive(Serialize, Deserialize)]
@@ -51,7 +51,7 @@ fn fetch_latest_tag() -> Option<String> {
             "--max-time",
             "8",
             "-H",
-            "User-Agent: polymarket-cli",
+            "User-Agent: fiberglass",
             &format!("https://api.github.com/repos/{REPO}/releases/latest"),
         ])
         .output()

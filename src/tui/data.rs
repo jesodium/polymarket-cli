@@ -483,17 +483,39 @@ pub(crate) async fn fetch_resolutions(
 }
 
 async fn fetch_markets(client: &gamma::Client) -> anyhow::Result<Vec<MarketRow>> {
+    // Order server-side by 24h volume desc so we get the most actively traded
+    // markets, not Gamma's default (featured/recent) page.
+    // ponytail: client re-sort removed — it would undo the server order;
+    // switch the order string if a different sort is wanted.
     let request = gamma::types::request::MarketsRequest::builder()
         .closed(false)
-        .limit(150)
+        .order("volume24hr".to_string())
+        .ascending(false)
+        .limit(500)
         .build();
     let markets = client.markets(&request).await?;
-    let mut rows: Vec<MarketRow> = markets.into_iter().filter_map(to_market_row).collect();
-    rows.sort_by(|a, b| {
-        b.volume
-            .unwrap_or(Decimal::ZERO)
-            .cmp(&a.volume.unwrap_or(Decimal::ZERO))
-    });
+    // Cap markets per parent event so a single multi-outcome event (e.g. "World
+    // Cup Winner", one market per team) can't flood the list and crowd out other
+    // categories. Markets sharing an event id past the cap are dropped; markets
+    // with no event are keyed by their own id, so they're never capped.
+    // ponytail: fixed cap of 2 — make it a setting if users want to tune it.
+    const PER_EVENT_CAP: usize = 2;
+    let mut per_event: HashMap<String, usize> = HashMap::new();
+    let rows: Vec<MarketRow> = markets
+        .into_iter()
+        .filter(|m| {
+            let key = m
+                .events
+                .as_ref()
+                .and_then(|e| e.first())
+                .map(|e| e.id.clone())
+                .unwrap_or_else(|| m.id.clone());
+            let n = per_event.entry(key).or_insert(0);
+            *n += 1;
+            *n <= PER_EVENT_CAP
+        })
+        .filter_map(to_market_row)
+        .collect();
     Ok(rows)
 }
 

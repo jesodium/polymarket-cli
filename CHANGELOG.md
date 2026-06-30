@@ -7,6 +7,18 @@ tags. The section matching a release tag is published as that release's notes
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-06-30
+
+### Changed
+- Rebranded the project to **Fiberglass** (crate, repo, MCP server name, and
+  TUI chrome). The installed binary, Homebrew formula, and CLI invocation are
+  unchanged (`polymarket`).
+- Market list now requests the top 500 markets ordered server-side by 24h
+  volume and caps each parent event to 2 markets, so a single multi-outcome
+  event can no longer flood the list.
+- Dashboard PnL/ROI/expectancy and avg win/loss are now color-tinted
+  (green/red), and the win-rate line shows W/L counts in green/red.
+
 ## [0.1.11] - 2026-06-29
 
 ### Added

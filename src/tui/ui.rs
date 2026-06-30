@@ -224,7 +224,7 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(mc))
         .title(Span::styled(
-            " ◈ POLYMARKET ",
+            " ◈ FIBERGLASS ",
             Style::default().fg(mc).bold(),
         ));
     f.render_widget(Paragraph::new(lines).block(block), area);
@@ -322,30 +322,44 @@ fn dashboard(f: &mut Frame, app: &App, area: Rect) {
         kv_line("Open Positions", &positions.to_string()),
         kv_line("Open Orders", &open_orders.to_string()),
         kv_line("Copy Followers", &following.to_string()),
-        kv_line(
+        kv_colored(
             "ROI",
             &if loading {
                 loading_anim()
             } else {
                 format!("{}%", view.roi_pct)
             },
+            if loading {
+                DIM
+            } else {
+                pnl_color(view.roi_pct)
+            },
         ),
-        kv_line("Realized PnL", &signed_money(view.realized_pnl)),
-        kv_line(
+        kv_colored(
+            "Realized PnL",
+            &signed_money(view.realized_pnl),
+            pnl_color(view.realized_pnl),
+        ),
+        kv_colored(
             "Unrealized PnL",
             &loading_signed(view.unrealized_pnl, loading),
+            if loading {
+                DIM
+            } else {
+                pnl_color(view.unrealized_pnl)
+            },
         ),
-        kv_line(
-            "Win Rate",
-            &format!(
-                "{}% ({}W {}L)",
-                stats.win_rate.round_dp(1),
-                stats.wins,
-                stats.losses
-            ),
+        win_rate_line(stats.win_rate, stats.wins, stats.losses),
+        kv_colored(
+            "Avg Win",
+            &signed_money(stats.avg_win),
+            pnl_color(stats.avg_win),
         ),
-        kv_line("Avg Win", &signed_money(stats.avg_win)),
-        kv_line("Avg Loss", &signed_money(stats.avg_loss)),
+        kv_colored(
+            "Avg Loss",
+            &signed_money(stats.avg_loss),
+            pnl_color(stats.avg_loss),
+        ),
         kv_line(
             "Profit Factor",
             &match stats.profit_factor {
@@ -353,7 +367,11 @@ fn dashboard(f: &mut Frame, app: &App, area: Rect) {
                 None => "∞".into(),
             },
         ),
-        kv_line("Expectancy", &signed_money(stats.expectancy)),
+        kv_colored(
+            "Expectancy",
+            &signed_money(stats.expectancy),
+            pnl_color(stats.expectancy),
+        ),
     ];
     // Only shown once equity snapshots have accumulated (hidden for accounts
     // predating equity snapshotting).
@@ -1785,7 +1803,7 @@ fn render_onboarding(f: &mut Frame, state: &OnboardingState) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ACCENT))
         .title(Span::styled(
-            " POLYMARKET LIVE TRADING ",
+            " FIBERGLASS LIVE TRADING ",
             Style::default().fg(ACCENT).bold(),
         ));
     let inner = block.inner(area);
@@ -2360,6 +2378,26 @@ fn kv_line(key: &str, val: &str) -> Line<'static> {
     Line::from(vec![
         Span::styled(format!("{key:<22}"), Style::default().fg(DIM)),
         Span::raw(val.to_string()),
+    ])
+}
+
+/// Same as `kv_line` but tints the value (used for PnL/ROI lines).
+fn kv_colored(key: &str, val: &str, color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{key:<22}"), Style::default().fg(DIM)),
+        Span::styled(val.to_string(), Style::default().fg(color)),
+    ])
+}
+
+/// Win-rate line with the W count in green and the L count in red.
+fn win_rate_line(rate: Decimal, wins: usize, losses: usize) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{:<22}", "Win Rate"), Style::default().fg(DIM)),
+        Span::raw(format!("{}% (", rate.round_dp(1))),
+        Span::styled(format!("{wins}W"), Style::default().fg(GOOD)),
+        Span::raw(" "),
+        Span::styled(format!("{losses}L"), Style::default().fg(BAD)),
+        Span::raw(")"),
     ])
 }
 

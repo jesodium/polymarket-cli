@@ -4,7 +4,7 @@ use std::process::Command;
 
 use anyhow::{Context, bail};
 
-const REPO: &str = "Polymarket/polymarket-cli";
+const REPO: &str = "jesodium/fiberglass";
 const BINARY: &str = "polymarket";
 
 pub fn execute() -> anyhow::Result<()> {

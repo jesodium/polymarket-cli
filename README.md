@@ -1,9 +1,9 @@
-# Polymarket CLI & Trading Terminal
+# Fiberglass
 
-> A local-first prediction-market **trading terminal** for Polymarket — browse markets, place market & limit orders, manage positions, and run copy-trading from a keyboard-driven TUI (or as a JSON API for scripts and agents).
+> Fiberglass is a local-first prediction-market **trading terminal** for Polymarket — browse markets, place market & limit orders, manage positions, and run copy-trading from a keyboard-driven TUI (or as a JSON API for scripts and agents).
 
 <p align="center">
-  <a href="https://github.com/jesodium/polymarket-cli/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jesodium/polymarket-cli/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/jesodium/fiberglass/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/jesodium/fiberglass/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Rust" src="https://img.shields.io/badge/rust-1.88%2B-orange?logo=rust&logoColor=white">
   <img alt="TUI" src="https://img.shields.io/badge/TUI-ratatui-00b3b3?logo=gnometerminal&logoColor=white">
   <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey">
@@ -33,28 +33,28 @@
 | MCP server | ✅ | `polymarket mcp` — 37 tools for AI agents, paper + live |
 | Live trading | 🚧 | Real CLOB orders wired — **untested with real funds** |
 | Risk caps / kill-switch | ⏳ | Planned before autonomous live is safe |
-| Hosted agents | ⏳ | See [docs/ROADMAP.md](docs/ROADMAP.md) |
+| Hosted agents | ⏳ | Planned |
 
 ## Install
 
 ### Homebrew (macOS / Linux)
 
 ```bash
-brew tap jesodium/polymarket-cli https://github.com/jesodium/polymarket-cli
+brew tap jesodium/fiberglass https://github.com/jesodium/fiberglass
 brew install polymarket
 ```
 
 ### Shell script
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/jesodium/polymarket-cli/main/install.sh | sh
+curl -sSL https://raw.githubusercontent.com/jesodium/fiberglass/main/install.sh | sh
 ```
 
 ### Build from source
 
 ```bash
-git clone https://github.com/jesodium/polymarket-cli
-cd polymarket-cli
+git clone https://github.com/jesodium/fiberglass
+cd fiberglass
 cargo install --path .
 ```
 

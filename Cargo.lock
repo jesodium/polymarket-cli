@@ -1908,6 +1908,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "fiberglass"
+version = "0.1.12"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "assert_cmd",
+ "chrono",
+ "clap",
+ "clap_complete",
+ "crossterm",
+ "dirs",
+ "polymarket_client_sdk_v2",
+ "predicates",
+ "ratatui",
+ "rust_decimal",
+ "rust_decimal_macros",
+ "rustyline",
+ "serde",
+ "serde_json",
+ "tabled",
+ "tokio",
+ "webbrowser",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3179,31 +3204,6 @@ checksum = "f950b2377845cebe5cf8b5165cb3cc1a5e0fa5cfa3e1f7f55707d8fd82e0a7b7"
 dependencies = [
  "der",
  "spki",
-]
-
-[[package]]
-name = "polymarket-cli"
-version = "0.1.11"
-dependencies = [
- "alloy",
- "anyhow",
- "assert_cmd",
- "chrono",
- "clap",
- "clap_complete",
- "crossterm",
- "dirs",
- "polymarket_client_sdk_v2",
- "predicates",
- "ratatui",
- "rust_decimal",
- "rust_decimal_macros",
- "rustyline",
- "serde",
- "serde_json",
- "tabled",
- "tokio",
- "webbrowser",
 ]
 
 [[package]]
