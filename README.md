@@ -121,6 +121,10 @@ machine accordingly.
 
 see [changelog.md](CHANGELOG.md) for what changed.
 
+## stars
+
+[![star history](https://api.star-history.com/svg?repos=jesodium/fiberglass&type=Date)](https://star-history.com/#jesodium/fiberglass&Date)
+
 ## license
 
 mit
