@@ -2119,6 +2119,12 @@ impl App {
 
 // --- Wallet action modal (Settings tab) ---------------------------------
 
+/// Whether an import must pause for an overwrite confirmation before writing.
+/// Only an existing wallet is at risk; a first-time import has nothing to clobber.
+fn import_needs_confirm(config_exists: bool, already_confirmed: bool) -> bool {
+    config_exists && !already_confirmed
+}
+
 impl App {
     fn wallet_action_modal_key(&mut self, key: KeyEvent) {
         let Some(m) = self.wallet_action_modal.as_mut() else {
@@ -2142,16 +2148,31 @@ impl App {
                 KeyCode::Esc => {
                     self.wallet_action_modal = None;
                 }
+                // Editing the key cancels any pending overwrite confirmation.
                 KeyCode::Backspace => {
                     m.import_key.pop();
+                    m.confirmed = false;
                 }
                 KeyCode::Char(c) => {
                     m.import_key.push(c);
+                    m.confirmed = false;
                 }
                 KeyCode::Enter => {
                     let key = m.import_key.trim().to_string();
                     if key.is_empty() {
                         m.error = Some("Enter a private key.".to_string());
+                        return;
+                    }
+                    // Validate before touching the config so a bad key can't
+                    // close the modal or overwrite the existing wallet.
+                    if LocalSigner::from_str(&key).is_err() {
+                        m.error = Some("Invalid private key. Enter a valid hex key.".to_string());
+                        m.confirmed = false;
+                        return;
+                    }
+                    // Importing replaces the stored key — confirm once first.
+                    if import_needs_confirm(config::config_exists(), m.confirmed) {
+                        m.confirmed = true;
                         return;
                     }
                     self.execute_import_wallet(&key);
@@ -2330,5 +2351,15 @@ mod tests {
         assert_eq!(parse_opt_dec("  "), None);
         assert_eq!(parse_opt_dec("25"), Some(dec!(25)));
         assert_eq!(parse_opt_dec("-5"), None);
+    }
+
+    #[test]
+    fn import_confirms_before_overwriting_existing_wallet() {
+        // Existing wallet, not yet confirmed → pause and ask.
+        assert!(import_needs_confirm(true, false));
+        // Existing wallet, user confirmed → proceed with overwrite.
+        assert!(!import_needs_confirm(true, true));
+        // No wallet yet → nothing to clobber, import straight away.
+        assert!(!import_needs_confirm(false, false));
     }
 }

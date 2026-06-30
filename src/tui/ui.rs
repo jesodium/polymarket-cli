@@ -1918,7 +1918,16 @@ fn render_wallet_action_modal(f: &mut Frame, m: &WalletActionModal) {
                 )));
                 lines.push(Line::from(""));
             }
-            lines.push(Line::from("Enter to import · Esc to cancel".fg(DIM)));
+            if m.confirmed {
+                lines.push(Line::from("This REPLACES your current wallet.".fg(BAD)));
+                lines.push(Line::from("Back up your existing key first.".fg(DIM)));
+                lines.push(Line::from(""));
+                lines.push(Line::from(
+                    "Enter to confirm overwrite · Esc to cancel".fg(DIM),
+                ));
+            } else {
+                lines.push(Line::from("Enter to import · Esc to cancel".fg(DIM)));
+            }
             popup(f, 58, "IMPORT WALLET", ACCENT, lines);
         }
         WalletAction::SetProxy => {
