@@ -9,12 +9,19 @@ const SIG_TYPE_ENV_VAR: &str = "POLYMARKET_SIGNATURE_TYPE";
 const PROXY_ENV_VAR: &str = "POLYMARKET_PROXY_ADDRESS";
 pub(crate) const DEFAULT_SIGNATURE_TYPE: &str = "proxy";
 
+/// OS keychain coordinates for the private key (one wallet per machine).
+const KEYRING_SERVICE: &str = "fiberglass";
+const KEYRING_USER: &str = "private-key";
+
 pub(crate) const NO_WALLET_MSG: &str =
     "No wallet configured. Run `polymarket wallet create` or `polymarket wallet import <key>`";
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Config {
-    pub private_key: String,
+    /// The private key, when stored in the plaintext config file. Absent when
+    /// the key lives in the OS keychain (the default on machines that have one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_key: Option<String>,
     pub chain_id: u64,
     #[serde(default = "default_signature_type")]
     pub signature_type: String,
@@ -33,6 +40,7 @@ fn default_signature_type() -> String {
 pub(crate) enum KeySource {
     Flag,
     EnvVar,
+    Keychain,
     ConfigFile,
     None,
 }
@@ -42,9 +50,44 @@ impl KeySource {
         match self {
             Self::Flag => "--private-key flag",
             Self::EnvVar => "POLYMARKET_PRIVATE_KEY env var",
-            Self::ConfigFile => "config file",
+            Self::Keychain => "OS keychain",
+            Self::ConfigFile => "config file (plaintext)",
             Self::None => "not configured",
         }
+    }
+}
+
+/// Where `save_wallet` actually put the key, so callers can tell the user.
+pub(crate) enum KeyStorage {
+    Keychain,
+    PlaintextFile,
+}
+
+// --- OS keychain -----------------------------------------------------------
+// Best-effort: every operation degrades to "not available" rather than failing,
+// so a headless box with no secret service still works off the plaintext file.
+
+/// Keychain service name; overridable for test isolation.
+fn keyring_service() -> String {
+    std::env::var("POLYMARKET_KEYRING_SERVICE").unwrap_or_else(|_| KEYRING_SERVICE.to_string())
+}
+
+fn keychain_set(key: &str) -> bool {
+    keyring::Entry::new(&keyring_service(), KEYRING_USER)
+        .and_then(|e| e.set_password(key))
+        .is_ok()
+}
+
+fn keychain_get() -> Option<String> {
+    keyring::Entry::new(&keyring_service(), KEYRING_USER)
+        .ok()?
+        .get_password()
+        .ok()
+}
+
+fn keychain_delete() {
+    if let Ok(e) = keyring::Entry::new(&keyring_service(), KEYRING_USER) {
+        let _ = e.delete_credential();
     }
 }
 
@@ -64,6 +107,7 @@ pub fn config_exists() -> bool {
 /// Delete the wallet config file only. Other files in the config directory
 /// (e.g. the paper trading account) are left untouched.
 pub fn delete_config() -> Result<()> {
+    keychain_delete();
     let path = config_path()?;
     if path.exists() {
         fs::remove_file(&path).context("Failed to remove config file")?;
@@ -103,15 +147,39 @@ pub fn resolve_signature_type(cli_flag: Option<&str>) -> Result<String> {
     Ok(DEFAULT_SIGNATURE_TYPE.to_string())
 }
 
-pub fn save_wallet(key: &str, chain_id: u64, signature_type: &str) -> Result<()> {
+pub fn save_wallet(key: &str, chain_id: u64, signature_type: &str) -> Result<KeyStorage> {
     // A freshly created/imported wallet starts with no proxy override; the
     // derived address applies until the user sets one with `wallet set-proxy`.
+    // Prefer the OS keychain; only fall back to a plaintext file if there is no
+    // keychain backend (e.g. a headless server with no secret service).
+    let in_keychain = keychain_set(key);
     write_config(&Config {
-        private_key: key.to_string(),
+        private_key: (!in_keychain).then(|| key.to_string()),
         chain_id,
         signature_type: signature_type.to_string(),
         proxy_address: None,
+    })?;
+    Ok(if in_keychain {
+        KeyStorage::Keychain
+    } else {
+        KeyStorage::PlaintextFile
     })
+}
+
+/// Migrate a plaintext key from the config file into the OS keychain and scrub
+/// it from disk. Returns the resulting storage. Errors if no wallet exists.
+pub fn secure_existing_key() -> Result<KeyStorage> {
+    let (key, _) = resolve_key(None)?;
+    let key = key.ok_or_else(|| anyhow::anyhow!("{}", NO_WALLET_MSG))?;
+    if !keychain_set(&key) {
+        anyhow::bail!("No OS keychain available on this machine; key left in the config file.");
+    }
+    // Drop the plaintext key from the file, keep the rest of the config.
+    if let Some(mut config) = load_config()? {
+        config.private_key = None;
+        write_config(&config)?;
+    }
+    Ok(KeyStorage::Keychain)
 }
 
 /// Resolve the funder/proxy override. Priority: env var > config file.
@@ -178,7 +246,7 @@ fn write_config(config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Priority: CLI flag > env var > config file.
+/// Priority: CLI flag > env var > OS keychain > plaintext config file.
 pub fn resolve_key(cli_flag: Option<&str>) -> Result<(Option<String>, KeySource)> {
     if let Some(key) = cli_flag {
         return Ok((Some(key.to_string()), KeySource::Flag));
@@ -188,8 +256,11 @@ pub fn resolve_key(cli_flag: Option<&str>) -> Result<(Option<String>, KeySource)
     {
         return Ok((Some(key), KeySource::EnvVar));
     }
-    if let Some(config) = load_config()? {
-        return Ok((Some(config.private_key), KeySource::ConfigFile));
+    if let Some(key) = keychain_get() {
+        return Ok((Some(key), KeySource::Keychain));
+    }
+    if let Some(key) = load_config()?.and_then(|c| c.private_key) {
+        return Ok((Some(key), KeySource::ConfigFile));
     }
     Ok((None, KeySource::None))
 }
@@ -275,5 +346,35 @@ mod tests {
         unsafe { unset(SIG_TYPE_ENV_VAR) };
         let result = resolve_signature_type(None).unwrap();
         assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn config_omits_private_key_when_in_keychain() {
+        // When the key lives in the keychain, the file must not carry it.
+        let c = Config {
+            private_key: None,
+            chain_id: 137,
+            signature_type: "proxy".into(),
+            proxy_address: None,
+        };
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(
+            !json.contains("private_key"),
+            "key leaked into file: {json}"
+        );
+    }
+
+    // Hits the real OS keychain, so it's opt-in: `cargo test -- --ignored`.
+    // Uses an isolated service name and cleans up after itself.
+    #[test]
+    #[ignore]
+    fn keychain_roundtrip() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        unsafe { set("POLYMARKET_KEYRING_SERVICE", "fiberglass-sbtest") };
+        assert!(keychain_set("0xdeadbeef"), "no keychain backend available");
+        assert_eq!(keychain_get().as_deref(), Some("0xdeadbeef"));
+        keychain_delete();
+        assert!(keychain_get().is_none());
+        unsafe { unset("POLYMARKET_KEYRING_SERVICE") };
     }
 }

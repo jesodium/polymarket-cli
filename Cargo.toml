@@ -30,6 +30,9 @@ rustyline = "15"
 ratatui = "0.29"
 crossterm = "0.28"
 webbrowser = "1.2.1"
+# OS keychain for the private key: macOS Keychain / Windows Credential Manager /
+# Linux Secret Service. `crypto-rust` avoids a libsecret system dependency.
+keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 
 [dev-dependencies]
 assert_cmd = "2"

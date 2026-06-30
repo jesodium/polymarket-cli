@@ -571,7 +571,7 @@ fn run_cli_argv(args: &Value) -> Result<Vec<String>> {
         })
         .collect::<Result<_>>()?;
 
-    const BLOCKED: &[&str] = &["tui", "shell", "setup", "mcp", "upgrade"];
+    const BLOCKED: &[&str] = &["tui", "shell", "mcp", "upgrade"];
     let first = argv.first().map(String::as_str).unwrap_or_default();
     if first.is_empty() {
         bail!("`args` must not be empty");

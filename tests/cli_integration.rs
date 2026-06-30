@@ -13,8 +13,7 @@ fn polymarket() -> Command {
 #[test]
 fn help_lists_all_top_level_commands() {
     polymarket().arg("--help").assert().success().stdout(
-        predicate::str::contains("setup")
-            .and(predicate::str::contains("shell"))
+        predicate::str::contains("shell")
             .and(predicate::str::contains("markets"))
             .and(predicate::str::contains("events"))
             .and(predicate::str::contains("tags"))
@@ -75,8 +74,8 @@ fn wallet_help_lists_subcommands() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("create")
-                .and(predicate::str::contains("import"))
+            predicate::str::contains("import")
+                .and(predicate::str::contains("secure"))
                 .and(predicate::str::contains("address"))
                 .and(predicate::str::contains("show"))
                 .and(predicate::str::contains("reset")),

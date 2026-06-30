@@ -30,7 +30,7 @@ pub enum SeriesCommand {
         #[arg(long)]
         order: Option<String>,
 
-        /// Sort ascending instead of descending
+        /// Sort ascending. Default is descending (highest first).
         #[arg(long)]
         ascending: bool,
 

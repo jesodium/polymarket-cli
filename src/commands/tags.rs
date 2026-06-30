@@ -30,7 +30,7 @@ pub enum TagsCommand {
         #[arg(long)]
         offset: Option<i32>,
 
-        /// Sort ascending instead of descending
+        /// Sort ascending. Default is descending (highest first).
         #[arg(long)]
         ascending: bool,
     },

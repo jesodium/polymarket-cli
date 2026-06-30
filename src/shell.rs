@@ -25,15 +25,11 @@ pub async fn run_shell() -> anyhow::Result<()> {
                 let mut full_args = vec!["fiberglass".to_string()];
                 full_args.extend(args);
 
-                if let Some(cmd) = full_args.get(1) {
-                    if cmd == "shell" {
-                        println!("Already in shell mode.");
-                        continue;
-                    }
-                    if cmd == "setup" {
-                        println!("Run 'polymarket setup' outside the shell.");
-                        continue;
-                    }
+                if let Some(cmd) = full_args.get(1)
+                    && cmd == "shell"
+                {
+                    println!("Already in shell mode.");
+                    continue;
                 }
 
                 match crate::Cli::try_parse_from(&full_args) {

@@ -43,8 +43,6 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Guided first-time setup (wallet, proxy, approvals)
-    Setup,
     /// Launch the interactive trading terminal (TUI) — the primary interface
     Tui {
         /// Trade against the paper account (simulated). Without this flag the
@@ -140,7 +138,6 @@ pub(crate) async fn run(cli: Cli) -> anyhow::Result<()> {
     let bridge = std::cell::LazyCell::new(polymarket_client_sdk_v2::bridge::Client::default);
 
     match cli.command {
-        Commands::Setup => commands::setup::execute(),
         Commands::Tui { paper } => Box::pin(tui::run(paper)).await,
         Commands::Shell => Box::pin(shell::run_shell()).await,
         Commands::Mcp => mcp::run(),

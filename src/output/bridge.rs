@@ -115,6 +115,11 @@ pub fn print_status(response: &StatusResponse, output: &OutputFormat) -> anyhow:
         OutputFormat::Table => {
             if response.transactions.is_empty() {
                 println!("No transactions found.");
+                println!(
+                    "If you just deposited, the bridge indexer can take a few minutes \
+                     to pick up an on-chain transfer — wait and re-run this command. \
+                     Confirmed funds are not lost while pending indexing."
+                );
                 return Ok(());
             }
             #[derive(Tabled)]
