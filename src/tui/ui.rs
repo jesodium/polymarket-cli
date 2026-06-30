@@ -163,11 +163,15 @@ fn render_sidebar(f: &mut Frame, app: &App, area: Rect) {
         let active = *v == app.view || (app.view == View::MarketDetail && *v == View::Markets);
         let label = format!(" {} {}", i + 1, v.title());
         if active {
+            // Breathing fill + glowing edge bar, instead of a flat blue block.
+            let p = pulse(app.frame);
+            let bg = lerp(SELECT_BG, ACCENT, p * 0.45);
+            let bar = lerp(ACCENT, Color::White, p);
             lines.push(Line::from(vec![
-                Span::styled("▌", Style::default().fg(ACCENT)),
+                Span::styled("█", Style::default().fg(bar)),
                 Span::styled(
                     format!("{label:<width$}", width = W - 1),
-                    Style::default().fg(Color::White).bg(SELECT_BG).bold(),
+                    Style::default().fg(Color::White).bg(bg).bold(),
                 ),
             ]));
         } else {
