@@ -70,3 +70,7 @@ Paper mode (`--paper` flag or TUI toggle) uses `paper/` engine with a local JSON
 - `ratatui` + `crossterm` — TUI
 - `clap` — CLI parsing
 - `rust_decimal` — price/size precision
+
+## Rules
+
+Do not create branches to add features. Use the nightly branch.
