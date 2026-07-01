@@ -9,7 +9,7 @@
 
 mod app;
 pub(crate) mod data;
-mod live;
+pub(crate) mod live;
 mod ui;
 
 use std::io;
@@ -39,6 +39,11 @@ pub(crate) async fn run(paper: bool) -> Result<()> {
     } else {
         ExecutionMode::Live
     };
+
+    // Boot the background guard worker so TP/SL exits keep firing after the
+    // terminal closes. While we run, our heartbeat makes it skip this mode's
+    // guards — the in-process ticker below owns them.
+    crate::commands::guard::ensure_worker(true);
 
     let (account, live_user) = if paper {
         // Paper account is the backend; create one on first launch.

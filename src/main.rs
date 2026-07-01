@@ -2,6 +2,7 @@ mod auth;
 mod commands;
 mod config;
 mod copytrade;
+mod events;
 mod guard;
 mod mcp;
 mod output;
@@ -59,6 +60,8 @@ enum Commands {
     Mcp,
     /// Copy-trading: follow wallets and mirror their trades
     Copytrade(commands::copytrade::CopyTradeArgs),
+    /// TP/SL exit guards and the background worker that runs them
+    Guard(commands::guard::GuardArgs),
     /// View and edit trading settings (mode, presets, slippage, TP/SL)
     Settings(commands::settings::SettingsArgs),
     /// Interact with markets
@@ -91,6 +94,9 @@ enum Commands {
     Wallet(commands::wallet::WalletArgs),
     /// Check API health status
     Status,
+    /// Stop all background activity (the guard worker)
+    #[command(visible_aliases = ["die", "end"])]
+    Stop,
     /// Update to the latest version
     Upgrade,
     /// Generate a shell completion script (bash, zsh, fish, powershell, elvish)
@@ -145,6 +151,8 @@ pub(crate) async fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Shell => Box::pin(shell::run_shell()).await,
         Commands::Mcp => mcp::run(),
         Commands::Copytrade(args) => commands::copytrade::execute(args, cli.output).await,
+        Commands::Guard(args) => commands::guard::execute(args, cli.output).await,
+        Commands::Stop => commands::guard::stop_worker(),
         Commands::Settings(args) => commands::settings::execute(args, cli.output),
         Commands::Markets(args) => commands::markets::execute(&gamma, args, cli.output).await,
         Commands::Events(args) => commands::events::execute(&gamma, args, cli.output).await,

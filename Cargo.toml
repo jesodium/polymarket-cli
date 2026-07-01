@@ -1,6 +1,6 @@
 [package]
 name = "fiberglass"
-version = "0.1.15"
+version = "0.1.16"
 edition = "2024"
 rust-version = "1.88.0"
 description = "Fiberglass — a trading terminal for Polymarket: browse markets, trade, and manage positions"

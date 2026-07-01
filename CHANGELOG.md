@@ -10,7 +10,24 @@ version numbers keep their original case).
 
 ## [unreleased]
 
-## [0.1.15] - 2026-07-01
+## [0.1.16] - 2026-07-01
+
+### added
+- `guard` command — the TP/SL exit worker is now a first-class cli surface, not
+  just a tui background task. arm a guard on a token you hold (`guard set
+  <token> --tp <pct> --sl <pct> --trail <pct>`, `--live` for the wallet
+  position instead of paper), `guard clear`/`guard list` to manage them, and
+  `guard run`/`guard start`/`guard stop` to control the evaluation worker
+  (foreground or detached). `guard status` reports worker liveness and armed
+  guard count; `guard autostart on|off|show` wires the worker to start at login
+  on macos.
+- top-level `stop` command (aliases `die`, `end`) to kill the background guard
+  worker from anywhere.
+- notification events. guard exits and failed exits are appended to
+  `events.jsonl` in the config dir and popped as os notifications. `guard
+  events [--limit n]` prints the recent log.
+- mcp tools `guard_status` and `guard_events` so an agent can poll worker health
+  and relay guard fills/alerts to external channels.
 
 ### added
 - paper snapshots (`paper snapshot save/restore/list`). save named copies of

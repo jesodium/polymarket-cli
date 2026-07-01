@@ -145,7 +145,13 @@ pub(crate) async fn refresher(
     let mut market_ticks = 0u32;
     // Highest mark seen per token, for trailing-stop guards.
     let mut guard_peaks: HashMap<String, Decimal> = HashMap::new();
+    // Tells the background guard worker a TUI owns this mode's guards.
+    let mut last_heartbeat = std::time::Instant::now() - std::time::Duration::from_secs(60);
     loop {
+        if last_heartbeat.elapsed().as_secs() >= 3 {
+            crate::commands::guard::write_tui_heartbeat(live_user.is_some());
+            last_heartbeat = std::time::Instant::now();
+        }
         // Slow cadence: market list, resolutions, balance, open orders (~15s).
         if market_ticks == 0 {
             if let Some(user) = live_user {
@@ -359,6 +365,10 @@ fn tick_guards(
     }
     let now = Utc::now();
     for g in &book.guards {
+        // Guards armed in the other mode belong to the background worker.
+        if g.live != live {
+            continue;
+        }
         let (free, avg) = {
             let acct = account.lock().unwrap();
             match acct.positions.get(&g.token_id) {
@@ -390,11 +400,13 @@ fn tick_guards(
                     };
                     let shared = Arc::clone(shared);
                     let label = reason.to_string();
+                    let token_id = g.token_id.clone();
                     tokio::spawn(async move {
-                        let msg = match live::place(order).await {
-                            Ok(s) => format!("{label} exit: {s}"),
-                            Err(e) => format!("{label} exit FAILED: {e}"),
+                        let (kind, msg) = match live::place(order).await {
+                            Ok(s) => ("guard-exit", format!("{label} exit: {s}")),
+                            Err(e) => ("guard-exit-failed", format!("{label} exit FAILED: {e}")),
                         };
+                        crate::events::emit(kind, true, &token_id, &msg, true);
                         shared.lock().unwrap().notices.push(msg);
                     });
                 } else {
@@ -405,19 +417,25 @@ fn tick_guards(
                     match result {
                         Ok(t) => {
                             let _ = crate::paper::store::save(&account.lock().unwrap());
-                            shared.lock().unwrap().notices.push(format!(
+                            let msg = format!(
                                 "{reason} exit: sold {} @ {} (pnl {})",
                                 t.size.round_dp(2),
                                 t.price.round_dp(4),
                                 t.realized_pnl.unwrap_or_default().round_dp(2)
-                            ));
+                            );
+                            crate::events::emit("guard-exit", false, &g.token_id, &msg, true);
+                            shared.lock().unwrap().notices.push(msg);
                         }
                         Err(e) => {
-                            shared
-                                .lock()
-                                .unwrap()
-                                .notices
-                                .push(format!("{reason} exit rejected: {e}"));
+                            let msg = format!("{reason} exit rejected: {e}");
+                            crate::events::emit(
+                                "guard-exit-failed",
+                                false,
+                                &g.token_id,
+                                &msg,
+                                true,
+                            );
+                            shared.lock().unwrap().notices.push(msg);
                         }
                     }
                 }

@@ -148,12 +148,15 @@ pub(crate) enum SettingRow {
     Mode,
     /// Toggle: settle resolved markets automatically vs manual claim.
     AutoSettle,
+    /// Toggle: start the background guard worker at login (macOS LaunchAgent).
+    GuardAutostart,
     Field(SettingField),
 }
 
-pub(crate) const SETTING_ROWS: [SettingRow; 10] = [
+pub(crate) const SETTING_ROWS: [SettingRow; 11] = [
     SettingRow::Mode,
     SettingRow::AutoSettle,
+    SettingRow::GuardAutostart,
     SettingRow::Field(SettingField::Threshold),
     SettingRow::Field(SettingField::Quickbuy),
     SettingRow::Field(SettingField::Quicksell),
@@ -939,6 +942,20 @@ impl App {
                     "Resolved markets now wait for a manual claim (r on Positions).".into()
                 };
             }
+            SettingRow::GuardAutostart => {
+                let result = if crate::commands::guard::autostart_enabled() {
+                    crate::commands::guard::autostart_off()
+                } else {
+                    crate::commands::guard::autostart_on()
+                };
+                self.status = match result {
+                    Ok(()) if crate::commands::guard::autostart_enabled() => {
+                        "Guard worker will start at login.".into()
+                    }
+                    Ok(()) => "Guard worker autostart disabled.".into(),
+                    Err(e) => format!("Autostart toggle failed: {e}"),
+                };
+            }
             SettingRow::Field(field) => {
                 let input = self.setting_current_value(*field);
                 self.settings_modal = Some(SettingsEditModal {
@@ -1456,10 +1473,11 @@ impl App {
         }
         // One guard per token; arm replaces any existing one. The TUI data
         // refresher watches the position and sells when a threshold is crossed.
-        match crate::guard::arm(&token_id, tp, sl, trailing) {
+        match crate::guard::arm(&token_id, self.live, tp, sl, trailing) {
             Ok(()) => {
                 let g = crate::guard::Guard {
                     token_id,
+                    live: self.live,
                     take_profit_pct: tp,
                     stop_loss_pct: sl,
                     trailing_stop_pct: trailing,

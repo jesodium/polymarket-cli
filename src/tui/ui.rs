@@ -1537,7 +1537,7 @@ fn settings(f: &mut Frame, app: &App, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(6),
-            Constraint::Length(6),
+            Constraint::Length(7),
             Constraint::Length(10),
             Constraint::Length(8),
         ])
@@ -1708,6 +1708,14 @@ fn render_trading_settings(f: &mut Frame, app: &App, area: Rect) {
                         "Manual claim — r on Positions".to_string()
                     },
                 ),
+                SettingRow::GuardAutostart => (
+                    "Guard worker at login",
+                    if crate::commands::guard::autostart_enabled() {
+                        "On — starts with macOS".to_string()
+                    } else {
+                        "Off — starts with TUI/commands only".to_string()
+                    },
+                ),
                 SettingRow::Field(field) => {
                     let v = app.setting_current_value(*field);
                     let v = if v.is_empty() { "off".to_string() } else { v };
@@ -1864,6 +1872,16 @@ fn render_session_panel(f: &mut Frame, app: &App, area: Rect) {
             &app.copy_engine.running_count().to_string(),
         ),
         kv_line("Settings file", &settings_file),
+        Line::from(vec![
+            Span::styled(format!("{:<22}", "Guard worker"), Style::default().fg(DIM)),
+            match crate::commands::guard::worker_alive() {
+                Some(w) => Span::styled(
+                    format!("● running (pid {}, {} guard(s))", w.pid, w.guards),
+                    Style::default().fg(GOOD),
+                ),
+                None => Span::styled("○ not running", Style::default().fg(DIM)),
+            },
+        ]),
         Line::from(format!("Mode fixed for the session. {relaunch}").fg(DIM)),
     ];
     f.render_widget(

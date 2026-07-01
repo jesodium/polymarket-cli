@@ -100,6 +100,7 @@ pub(crate) mod copytrade;
 pub(crate) mod ctf;
 pub(crate) mod data;
 pub(crate) mod events;
+pub(crate) mod guard;
 pub(crate) mod markets;
 pub(crate) mod paper;
 pub(crate) mod profiles;

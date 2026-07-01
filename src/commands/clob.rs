@@ -674,6 +674,8 @@ pub async fn execute(
             post_only,
             paper,
         } => {
+            // Trading action: make sure armed TP/SL guards have their worker.
+            crate::commands::guard::ensure_worker(false);
             // Paper mode (explicit flag or global toggle) bypasses wallet,
             // signing, and the live exchange entirely.
             if paper || crate::paper::store::is_enabled()? {
@@ -769,6 +771,8 @@ pub async fn execute(
             order_type,
             paper,
         } => {
+            // Trading action: make sure armed TP/SL guards have their worker.
+            crate::commands::guard::ensure_worker(false);
             // Paper mode (explicit flag or global toggle) bypasses wallet,
             // signing, and the live exchange entirely. Amount semantics match
             // live orders: pUSD for buys, shares for sells.

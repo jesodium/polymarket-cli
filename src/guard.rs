@@ -25,6 +25,10 @@ const PATH_ENV_VAR: &str = "POLYMARKET_GUARD_FILE";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Guard {
     pub token_id: String,
+    /// Guards a live CLOB position (false = paper account). Recorded at arm
+    /// time so the background worker knows which account to watch.
+    #[serde(default)]
+    pub live: bool,
     /// Sell once unrealized gain reaches this percent (e.g. 30 = +30%).
     #[serde(default)]
     pub take_profit_pct: Option<Decimal>,
@@ -99,6 +103,7 @@ pub(crate) fn save(book: &GuardBook) -> Result<()> {
 /// removed instead. Persists the change.
 pub(crate) fn arm(
     token_id: &str,
+    live: bool,
     take_profit_pct: Option<Decimal>,
     stop_loss_pct: Option<Decimal>,
     trailing_stop_pct: Option<Decimal>,
@@ -107,6 +112,7 @@ pub(crate) fn arm(
     book.guards.retain(|g| g.token_id != token_id);
     let guard = Guard {
         token_id: token_id.to_string(),
+        live,
         take_profit_pct,
         stop_loss_pct,
         trailing_stop_pct,
@@ -224,6 +230,7 @@ mod tests {
     fn guard(tp: Option<Decimal>, sl: Option<Decimal>, tr: Option<Decimal>) -> Guard {
         Guard {
             token_id: "t".into(),
+            live: false,
             take_profit_pct: tp,
             stop_loss_pct: sl,
             trailing_stop_pct: tr,
@@ -365,13 +372,13 @@ mod tests {
         unsafe { std::env::set_var(PATH_ENV_VAR, &path) };
         let _ = std::fs::remove_file(&path);
 
-        arm("123", Some(dec!(30)), Some(dec!(20)), None).unwrap();
+        arm("123", false, Some(dec!(30)), Some(dec!(20)), None).unwrap();
         let book = load().unwrap();
         assert_eq!(book.guards.len(), 1);
         assert_eq!(book.guards[0].take_profit_pct, Some(dec!(30)));
 
         // Arming with no exits removes it.
-        arm("123", None, None, None).unwrap();
+        arm("123", false, None, None, None).unwrap();
         assert!(load().unwrap().guards.is_empty());
 
         unsafe { std::env::remove_var(PATH_ENV_VAR) };
