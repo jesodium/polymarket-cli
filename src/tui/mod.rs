@@ -26,7 +26,7 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
 use crate::config;
-use crate::copytrade::engine::{CopyEngine, ExecutionMode};
+use crate::copytrade::engine::CopyEngine;
 use crate::paper::store;
 use crate::paper::types::{PaperAccount, default_starting_balance};
 use app::App;
@@ -34,12 +34,6 @@ use app::App;
 /// Launch the terminal. `paper = true` trades the simulated account;
 /// `paper = false` runs LIVE against the real wallet and CLOB.
 pub(crate) async fn run(paper: bool) -> Result<()> {
-    let mode = if paper {
-        ExecutionMode::Paper
-    } else {
-        ExecutionMode::Live
-    };
-
     // Boot the background guard worker so TP/SL exits keep firing after the
     // terminal closes. While we run, our heartbeat makes it skip this mode's
     // guards — the in-process ticker below owns them.
@@ -75,13 +69,12 @@ pub(crate) async fn run(paper: bool) -> Result<()> {
     };
     let account = Arc::new(Mutex::new(account));
 
-    // The copy engine shares the same account handle so its fills show up live
-    // alongside manual trades.
-    let copy_engine = CopyEngine::new(
-        Arc::clone(&account),
-        crate::settings::load().copy_poll_secs,
-        mode,
-    );
+    // The copy engine shares the same account handle so paper fills show up live
+    // alongside manual trades. It's scoped to this TUI's mode (below), so a live
+    // TUI only mirrors live followers (CLOB) and never writes this paper handle —
+    // the headless daemon owns the other mode's followers while we're closed.
+    let copy_engine = CopyEngine::new(Arc::clone(&account), crate::settings::load().copy_poll_secs);
+    copy_engine.set_scope(paper);
     let shared = data::new_shared();
 
     // Background workers. The refresher also ticks the TP/SL guards.

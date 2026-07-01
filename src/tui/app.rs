@@ -1906,6 +1906,8 @@ impl App {
             slippage_pct: slippage,
             mirror_sells,
             enabled: true,
+            // New followers mirror in whichever mode this TUI is showing.
+            paper: !self.live,
         };
         match self.copy_engine.add(cfg) {
             Ok(()) => {

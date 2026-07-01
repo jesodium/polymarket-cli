@@ -32,6 +32,12 @@ pub(crate) enum ExecutionMode {
     Live,
 }
 
+impl ExecutionMode {
+    pub fn from_paper(paper: bool) -> Self {
+        if paper { Self::Paper } else { Self::Live }
+    }
+}
+
 impl std::fmt::Display for ExecutionMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -168,6 +174,7 @@ pub(crate) struct TraderStatus {
     pub id: String,
     pub nickname: String,
     pub wallet: String,
+    pub paper: bool,
     pub enabled: bool,
     pub running: bool,
     pub copied: u64,
@@ -179,9 +186,12 @@ pub(crate) struct TraderStatus {
 struct EngineState {
     traders: Vec<TraderState>,
     logs: std::collections::VecDeque<LogLine>,
-    mode: ExecutionMode,
     poll_count: u64,
     last_poll: Option<DateTime<Utc>>,
+    /// Restrict which followers execute: `Some(true)` = paper only, `Some(false)`
+    /// = live only, `None` = all. The TUI scopes to its own mode so it stays the
+    /// sole writer of the paper store; the headless daemon leaves it `None`.
+    scope: Option<bool>,
 }
 
 /// Cloneable handle to the copy-trading runtime (shares state via `Arc`).
@@ -193,17 +203,12 @@ pub(crate) struct CopyEngine {
 }
 
 impl CopyEngine {
-    pub fn new(account: Arc<Mutex<PaperAccount>>, interval: u64, mode: ExecutionMode) -> Self {
+    pub fn new(account: Arc<Mutex<PaperAccount>>, interval: u64) -> Self {
         let book = super::config::load().unwrap_or_default();
-        Self::from_book(account, interval, mode, &book)
+        Self::from_book(account, interval, &book)
     }
 
-    pub fn from_book(
-        account: Arc<Mutex<PaperAccount>>,
-        interval: u64,
-        mode: ExecutionMode,
-        book: &CopyBook,
-    ) -> Self {
+    pub fn from_book(account: Arc<Mutex<PaperAccount>>, interval: u64, book: &CopyBook) -> Self {
         let traders = book
             .traders
             .iter()
@@ -222,9 +227,9 @@ impl CopyEngine {
         let state = EngineState {
             traders,
             logs: std::collections::VecDeque::new(),
-            mode,
             poll_count: 0,
             last_poll: None,
+            scope: None,
         };
         Self {
             state: Arc::new(Mutex::new(state)),
@@ -242,10 +247,6 @@ impl CopyEngine {
     /// it up on the next tick, so the TUI can retune without a restart.
     pub fn set_interval(&self, secs: u64) {
         self.interval.store(secs.max(1), Ordering::Relaxed);
-    }
-
-    pub fn mode(&self) -> ExecutionMode {
-        self.state.lock().unwrap().mode
     }
 
     // --- Roster management -------------------------------------------------
@@ -338,6 +339,12 @@ impl CopyEngine {
         }
     }
 
+    /// Restrict execution to followers of one mode (`true` = paper, `false` =
+    /// live). The TUI calls this so it only mirrors its own mode's followers.
+    pub fn set_scope(&self, paper: bool) {
+        self.state.lock().unwrap().scope = Some(paper);
+    }
+
     fn mutate(&self, id: &str, f: impl FnOnce(&mut TraderState)) -> Result<()> {
         let mut st = self.state.lock().unwrap();
         let t = st
@@ -372,6 +379,7 @@ impl CopyEngine {
                 id: t.cfg.id.clone(),
                 nickname: t.cfg.nickname.clone(),
                 wallet: t.cfg.wallet.clone(),
+                paper: t.cfg.paper,
                 enabled: t.cfg.enabled,
                 running: t.running,
                 copied: t.copied,
@@ -391,6 +399,15 @@ impl CopyEngine {
         crate::paper::store::save(&self.account.lock().unwrap())
     }
 
+    /// Refresh the in-memory paper account from disk. The headless daemon calls
+    /// this before each poll so copy-fills stack on top of whatever the guard
+    /// worker (or a just-closed TUI) last wrote, instead of clobbering it.
+    pub fn reload_account(&self) {
+        if let Ok(Some(fresh)) = crate::paper::store::load() {
+            *self.account.lock().unwrap() = fresh;
+        }
+    }
+
     // --- The poll loop -----------------------------------------------------
 
     /// One poll: for every running follower, pull new trade activity and
@@ -400,9 +417,10 @@ impl CopyEngine {
         // Snapshot the work to do without holding the lock across awaits.
         let jobs: Vec<(String, CopyTrader, bool, i64)> = {
             let st = self.state.lock().unwrap();
+            let scope = st.scope;
             st.traders
                 .iter()
-                .filter(|t| t.running && t.cfg.enabled)
+                .filter(|t| t.running && t.cfg.enabled && scope.is_none_or(|p| p == t.cfg.paper))
                 .map(|t| (t.cfg.id.clone(), t.cfg.clone(), t.primed, t.last_seen_ts))
                 .collect()
         };
@@ -505,10 +523,10 @@ impl CopyEngine {
         (held - acct.reserved_shares(token_id)).max(Decimal::ZERO)
     }
 
-    /// Execute one copy action against the paper account or the live CLOB.
+    /// Execute one copy action against the paper account or the live CLOB —
+    /// each follower carries its own paper/live flag.
     async fn execute(&self, id: &str, cfg: &CopyTrader, action: CopyAction) {
-        let mode = self.mode();
-        match mode {
+        match ExecutionMode::from_paper(cfg.paper) {
             ExecutionMode::Live => {
                 let order = match &action {
                     CopyAction::Buy { token_id, usd } => crate::trade::LiveOrder::Market {
@@ -726,6 +744,7 @@ mod tests {
             slippage_pct: dec!(2),
             mirror_sells: true,
             enabled: true,
+            paper: true,
         }
     }
 

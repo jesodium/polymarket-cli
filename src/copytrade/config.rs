@@ -38,6 +38,14 @@ pub(crate) struct CopyTrader {
     pub mirror_sells: bool,
     /// Whether copying is allowed to run for this trader.
     pub enabled: bool,
+    /// Mirror onto the paper account instead of the live wallet. Rosters written
+    /// before this field existed default to paper — never silently go live.
+    #[serde(default = "default_true")]
+    pub paper: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// The whole copy-trading roster.

@@ -1,12 +1,15 @@
-//! `guard` — arm TP/SL exit guards and keep them running in the background.
+//! `guard` — arm TP/SL exit guards, plus the headless background worker.
 //!
-//! The worker (`guard run`) is a plain foreground loop; `guard start` (and the
-//! TUI on launch) spawns it detached so guards keep firing after you close the
-//! terminal. Coordination is two small heartbeat files in the config dir:
+//! The worker (`guard run`) is the TUI's two background jobs with no screen: it
+//! evaluates TP/SL guards *and* polls copy-trading. `fiberglass start` (and the
+//! TUI on launch / an order placement) spawns it detached so both keep running
+//! after you close the terminal. Coordination is two small heartbeat files in
+//! the config dir:
 //!
 //! * `guard-worker.json` — worker liveness, read by `status` / `ensure_worker`.
-//! * `tui-heartbeat.json` — written by a running TUI; the worker skips guards
-//!   of the TUI's mode so the two never evaluate the same position twice.
+//! * `tui-heartbeat.json` — written by a running TUI; while it's fresh the
+//!   worker skips that TUI's guards and stands down copy-trading entirely, so
+//!   the two never evaluate a position or mirror a trade twice.
 //!
 //! "Launch at login" is a macOS LaunchAgent plist; its presence on disk *is*
 //! the setting.
@@ -22,8 +25,12 @@ use clap::{Args, Subcommand};
 use polymarket_client_sdk_v2::types::Decimal;
 use serde::{Deserialize, Serialize};
 
+use std::sync::{Arc, Mutex};
+
+use crate::copytrade::engine::CopyEngine;
 use crate::guard::{self, Guard, GuardAction};
 use crate::output::OutputFormat;
+use crate::paper::types::PaperAccount;
 use crate::paper::{engine as paper_engine, quotes, store};
 use crate::trade::{self, LiveOrder};
 use crate::{auth, config};
@@ -64,7 +71,7 @@ pub enum GuardCommand {
     Clear { token_id: String },
     /// List armed guards
     List,
-    /// Run the guard worker in the foreground (Ctrl-C to stop)
+    /// Run the guard + copy-trade worker in the foreground (Ctrl-C to stop)
     Run {
         /// Seconds between evaluation passes
         #[arg(long, default_value_t = DEFAULT_INTERVAL_SECS)]
@@ -128,15 +135,7 @@ pub async fn execute(args: GuardArgs, output: OutputFormat) -> Result<()> {
             Ok(())
         }
         GuardCommand::Run { interval } => run_worker(interval.max(1)).await,
-        GuardCommand::Start => {
-            if let Some(w) = worker_alive() {
-                println!("Worker already running (pid {}).", w.pid);
-                return Ok(());
-            }
-            spawn_worker()?;
-            println!("Guard worker started in background. `guard status` to check on it.");
-            Ok(())
-        }
+        GuardCommand::Start => start_daemon(),
         GuardCommand::Stop => stop_worker(),
         GuardCommand::Status => {
             let worker = load_worker();
@@ -301,11 +300,30 @@ pub(crate) fn ensure_worker(quiet: bool) {
     }
     match spawn_worker() {
         Ok(()) if !quiet => {
-            eprintln!("Guard worker started in background (`fiberglass guard status`).");
+            eprintln!("Background worker started (`fiberglass guard status`).");
         }
         Ok(()) => {}
-        Err(e) => eprintln!("Could not start guard worker: {e:#}"),
+        Err(e) => eprintln!("Could not start background worker: {e:#}"),
     }
+}
+
+/// Top-level `fiberglass start`: spawn the detached daemon that runs TP/SL
+/// guards and copy-trading headless. Each guard/follower carries its own
+/// paper/live flag, so there's nothing mode-wide to choose here.
+pub fn start_daemon() -> Result<()> {
+    if let Some(w) = worker_alive() {
+        println!(
+            "Background worker already running (pid {}). `stop` to halt.",
+            w.pid
+        );
+        return Ok(());
+    }
+    spawn_worker()?;
+    println!(
+        "Started headless: TP/SL guards + copy-trading (each item runs in its own paper/live \
+         mode). Survives closing this terminal.\n`guard status` to check, `stop` to halt."
+    );
+    Ok(())
 }
 
 fn spawn_worker() -> Result<()> {
@@ -317,8 +335,8 @@ fn spawn_worker() -> Result<()> {
         .append(true)
         .open(dir.join(LOG_FILE))?;
     let mut cmd = Command::new(exe);
-    cmd.args(["guard", "run"])
-        .stdin(Stdio::null())
+    cmd.arg("guard").arg("run");
+    cmd.stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
     #[cfg(unix)]
@@ -376,7 +394,7 @@ async fn run_worker(interval: u64) -> Result<()> {
     if let Some(w) = worker_alive()
         && w.pid != std::process::id()
     {
-        bail!("Another guard worker is already running (pid {})", w.pid);
+        bail!("Another worker is already running (pid {})", w.pid);
     }
     let mut status = WorkerStatus {
         pid: std::process::id(),
@@ -386,10 +404,27 @@ async fn run_worker(interval: u64) -> Result<()> {
         guards: 0,
     };
     persist_worker(&status);
+
+    // Copy-trading half: only spin it up if the roster actually has followers.
+    // Each follower mirrors onto paper or live per its own flag — no mode here.
+    let copy_secs = crate::settings::load().copy_poll_secs.max(1);
+    let copy = {
+        let acct = store::load()?.unwrap_or_else(|| PaperAccount::new(Decimal::ZERO, false));
+        let acct = Arc::new(Mutex::new(acct));
+        let engine = CopyEngine::new(acct, copy_secs);
+        engine.start_all();
+        (engine.running_count() > 0).then_some(engine)
+    };
+    let mut last_copy = Utc::now() - chrono::Duration::seconds(copy_secs as i64);
+
     println!(
-        "[{}] guard worker up (pid {}, every {interval}s)",
+        "[{}] worker up (pid {}, every {interval}s, copy-trading {})",
         Utc::now().format("%Y-%m-%d %H:%M:%S"),
-        status.pid
+        status.pid,
+        copy.as_ref().map_or("off".into(), |c| format!(
+            "{} follower(s)",
+            c.running_count()
+        )),
     );
 
     let clob = auth::unauthenticated_clob_client()?;
@@ -397,9 +432,10 @@ async fn run_worker(interval: u64) -> Result<()> {
     let mut peaks: HashMap<String, Decimal> = HashMap::new();
 
     loop {
-        let book = guard::load().unwrap_or_default();
-        // A running TUI evaluates its own mode's guards; skip those.
+        // A running TUI runs its own guards + copy engine; step back so we
+        // never evaluate the same position or mirror the same trade twice.
         let tui_mode = tui_mode_alive();
+        let book = guard::load().unwrap_or_default();
         let due: Vec<Guard> = book
             .guards
             .iter()
@@ -411,6 +447,23 @@ async fn run_worker(interval: u64) -> Result<()> {
         {
             eprintln!("[{}] tick failed: {e:#}", Utc::now().format("%H:%M:%S"));
         }
+
+        // Copy-trading: the TUI owns it whenever one is open. Run on its own
+        // cadence, syncing from disk first so guard sells above aren't undone.
+        if let Some(copy) = &copy
+            && tui_mode.is_none()
+            && (Utc::now() - last_copy).num_seconds() >= copy_secs as i64
+        {
+            copy.reload_account();
+            if let Err(e) = copy.poll().await {
+                eprintln!(
+                    "[{}] copy poll failed: {e:#}",
+                    Utc::now().format("%H:%M:%S")
+                );
+            }
+            last_copy = Utc::now();
+        }
+
         status.last_tick = Some(Utc::now());
         status.guards = book.guards.len();
         persist_worker(&status);

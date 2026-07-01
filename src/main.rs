@@ -94,7 +94,13 @@ enum Commands {
     Wallet(commands::wallet::WalletArgs),
     /// Check API health status
     Status,
-    /// Stop all background activity (the guard worker)
+    /// Run all background trading headless — TP/SL guards + copy-trading.
+    ///
+    /// Detaches and keeps running after you close the terminal, exactly like
+    /// the TUI's background workers but with no screen. `stop` to halt,
+    /// `guard status` to check on it.
+    Start,
+    /// Stop all background activity (guards + copy-trading)
     #[command(visible_aliases = ["die", "end"])]
     Stop,
     /// Update to the latest version
@@ -152,6 +158,7 @@ pub(crate) async fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Mcp => mcp::run(),
         Commands::Copytrade(args) => commands::copytrade::execute(args, cli.output).await,
         Commands::Guard(args) => commands::guard::execute(args, cli.output).await,
+        Commands::Start => commands::guard::start_daemon(),
         Commands::Stop => commands::guard::stop_worker(),
         Commands::Settings(args) => commands::settings::execute(args, cli.output),
         Commands::Markets(args) => commands::markets::execute(&gamma, args, cli.output).await,

@@ -1381,6 +1381,8 @@ fn copytrade(f: &mut Frame, app: &App, area: Rect) {
                 Cell::from(s.id.clone()),
                 Cell::from(truncate(&s.nickname, 16)),
                 Cell::from(short_wallet(&s.wallet)),
+                Cell::from(if s.paper { "paper" } else { "LIVE" })
+                    .style(Style::default().fg(if s.paper { PAPER } else { LIVE })),
                 Cell::from(state).style(Style::default().fg(color)),
                 Cell::from(s.copied.to_string()),
                 Cell::from(s.skipped.to_string()),
@@ -1400,6 +1402,7 @@ fn copytrade(f: &mut Frame, app: &App, area: Rect) {
             Constraint::Length(14),
             Constraint::Length(16),
             Constraint::Length(13),
+            Constraint::Length(6),
             Constraint::Length(11),
             Constraint::Length(7),
             Constraint::Length(8),
@@ -1411,6 +1414,7 @@ fn copytrade(f: &mut Frame, app: &App, area: Rect) {
         "ID",
         "Nickname",
         "Wallet",
+        "Mode",
         "State",
         "Copied",
         "Skipped",
@@ -1418,8 +1422,7 @@ fn copytrade(f: &mut Frame, app: &App, area: Rect) {
         "Last Action",
     ]))
     .block(panel(&format!(
-        "Copy Trading — {} mode, {}s poll (n follow · s start · x stop · e enable · d disable · D unfollow)",
-        app.copy_engine.mode(),
+        "Copy Trading — {}s poll (n follow · s start · x stop · e enable · d disable · D unfollow)",
         app.copy_engine.interval()
     )))
     .row_highlight_style(highlight())

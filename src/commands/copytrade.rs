@@ -12,7 +12,7 @@ use clap::{Args, Subcommand};
 use polymarket_client_sdk_v2::types::{Address, Decimal};
 
 use crate::copytrade::config::{self, CopyTrader};
-use crate::copytrade::engine::{CopyEngine, ExecutionMode};
+use crate::copytrade::engine::CopyEngine;
 use crate::output::OutputFormat;
 use crate::paper::store;
 
@@ -52,6 +52,9 @@ pub enum CopyTradeCommand {
         /// Do NOT mirror the trader's sells (only copy entries)
         #[arg(long)]
         no_mirror_sells: bool,
+        /// Mirror onto the paper account (default: LIVE wallet — real funds)
+        #[arg(long)]
+        paper: bool,
     },
 
     /// Stop following a wallet
@@ -78,7 +81,8 @@ pub enum CopyTradeCommand {
     /// List followed traders and their rules
     List,
 
-    /// Run the copy-trading poller in the foreground (Ctrl-C to stop)
+    /// Run the copy-trading poller in the foreground (Ctrl-C to stop).
+    /// Each follower mirrors onto paper or live per its own `--paper` flag.
     Run {
         /// Only run this follower (default: all enabled)
         #[arg(long)]
@@ -86,10 +90,6 @@ pub enum CopyTradeCommand {
         /// Seconds between polls (default: the `copy_poll_secs` setting)
         #[arg(long)]
         interval: Option<u64>,
-        /// Mirror trades to the live CLOB instead of the paper account.
-        /// Real funds — needs a configured wallet.
-        #[arg(long)]
-        live: bool,
     },
 
     /// Print the copy-trading log file
@@ -112,6 +112,7 @@ pub async fn execute(args: CopyTradeArgs, output: OutputFormat) -> Result<()> {
             max_price,
             slippage,
             no_mirror_sells,
+            paper,
         } => {
             let wallet_str = format!("{wallet:#x}");
             let nickname = nickname.unwrap_or_else(|| short_wallet(&wallet_str));
@@ -130,33 +131,37 @@ pub async fn execute(args: CopyTradeArgs, output: OutputFormat) -> Result<()> {
                 slippage_pct: slippage,
                 mirror_sells: !no_mirror_sells,
                 enabled: true,
+                paper,
             };
-            let engine = build_engine(ExecutionMode::Paper)?;
+            let engine = build_engine()?;
             engine.add(cfg)?;
-            println!("Following '{nickname}' as '{id}'. Start mirroring with `copytrade run`.");
+            let mode = if paper { "paper" } else { "LIVE (real funds)" };
+            println!(
+                "Following '{nickname}' as '{id}' — {mode}. Start mirroring with `copytrade run` or `fiberglass start`."
+            );
             Ok(())
         }
         CopyTradeCommand::Remove { id } => {
-            build_engine(ExecutionMode::Paper)?.remove(&id)?;
+            build_engine()?.remove(&id)?;
             println!("Unfollowed '{id}'.");
             Ok(())
         }
         CopyTradeCommand::Enable { id } => {
-            build_engine(ExecutionMode::Paper)?.set_enabled(&id, true)?;
+            build_engine()?.set_enabled(&id, true)?;
             println!("Enabled '{id}'.");
             Ok(())
         }
         CopyTradeCommand::Disable { id } => {
-            build_engine(ExecutionMode::Paper)?.set_enabled(&id, false)?;
+            build_engine()?.set_enabled(&id, false)?;
             println!("Disabled '{id}'.");
             Ok(())
         }
         CopyTradeCommand::Status => {
-            print_status(&build_engine(ExecutionMode::Paper)?, output);
+            print_status(&build_engine()?, output);
             Ok(())
         }
         CopyTradeCommand::List => list(output),
-        CopyTradeCommand::Run { id, interval, live } => run(id, interval, live).await,
+        CopyTradeCommand::Run { id, interval } => run(id, interval).await,
         CopyTradeCommand::Logs { limit } => {
             print_log_file(limit);
             Ok(())
@@ -179,9 +184,10 @@ fn list(output: OutputFormat) -> Result<()> {
             println!("Followed traders:");
             for t in &book.traders {
                 println!(
-                    "  {:<14} {:<16} {} → ${} (cap ${}), band {}–{}, slip {}%{}{}",
+                    "  {:<14} {:<16} {:<5} {} → ${} (cap ${}), band {}–{}, slip {}%{}{}",
                     t.id,
                     t.nickname,
+                    if t.paper { "paper" } else { "LIVE" },
                     short_wallet(&t.wallet),
                     t.copy_size_usd.normalize(),
                     t.max_dollar_cap.normalize(),
@@ -208,6 +214,7 @@ fn print_status(engine: &CopyEngine, output: OutputFormat) {
                         "id": s.id,
                         "nickname": s.nickname,
                         "wallet": s.wallet,
+                        "paper": s.paper,
                         "enabled": s.enabled,
                         "running": s.running,
                         "copied": s.copied,
@@ -225,8 +232,8 @@ fn print_status(engine: &CopyEngine, output: OutputFormat) {
                 return;
             }
             println!(
-                "{:<14} {:<16} {:<9} {:<7} {:<8} LAST ACTION",
-                "ID", "NICKNAME", "STATE", "COPIED", "SKIPPED"
+                "{:<14} {:<16} {:<5} {:<9} {:<7} {:<8} LAST ACTION",
+                "ID", "NICKNAME", "MODE", "STATE", "COPIED", "SKIPPED"
             );
             for s in &snap {
                 let state = if s.running {
@@ -237,9 +244,10 @@ fn print_status(engine: &CopyEngine, output: OutputFormat) {
                     "disabled"
                 };
                 println!(
-                    "{:<14} {:<16} {:<9} {:<7} {:<8} {}",
+                    "{:<14} {:<16} {:<5} {:<9} {:<7} {:<8} {}",
                     s.id,
                     s.nickname,
+                    if s.paper { "paper" } else { "LIVE" },
                     state,
                     s.copied,
                     s.skipped,
@@ -250,21 +258,16 @@ fn print_status(engine: &CopyEngine, output: OutputFormat) {
     }
 }
 
-async fn run(id: Option<String>, interval: Option<u64>, live: bool) -> Result<()> {
+async fn run(id: Option<String>, interval: Option<u64>) -> Result<()> {
     let interval = interval
         .unwrap_or_else(|| crate::settings::load().copy_poll_secs)
         .max(1);
     if store::load()?.is_none() {
         bail!(
-            "No paper account. Run `polymarket paper enable` first (copy-trading mirrors onto the paper account)."
+            "No paper account. Run `polymarket paper enable` first (paper followers mirror onto it)."
         );
     }
-    let mode = if live {
-        ExecutionMode::Live
-    } else {
-        ExecutionMode::Paper
-    };
-    let engine = build_engine_with_interval(mode, interval)?;
+    let engine = build_engine_with_interval(interval)?;
 
     match &id {
         Some(id) => {
@@ -281,7 +284,7 @@ async fn run(id: Option<String>, interval: Option<u64>, live: bool) -> Result<()
     }
 
     println!(
-        "Copy-trading running ({mode} mode, {interval}s poll). {} follower(s) active. Ctrl-C to stop.\n",
+        "Copy-trading running ({interval}s poll, per-follower paper/live). {} follower(s) active. Ctrl-C to stop.\n",
         engine.running_count()
     );
 
@@ -321,11 +324,11 @@ fn drain_logs(engine: &CopyEngine, seen: usize) -> usize {
     logs.len()
 }
 
-fn build_engine(mode: ExecutionMode) -> Result<CopyEngine> {
-    build_engine_with_interval(mode, crate::settings::load().copy_poll_secs)
+fn build_engine() -> Result<CopyEngine> {
+    build_engine_with_interval(crate::settings::load().copy_poll_secs)
 }
 
-fn build_engine_with_interval(mode: ExecutionMode, interval: u64) -> Result<CopyEngine> {
+fn build_engine_with_interval(interval: u64) -> Result<CopyEngine> {
     let account = store::load()?.unwrap_or_else(|| {
         crate::paper::types::PaperAccount::new(
             crate::paper::types::default_starting_balance(),
@@ -333,7 +336,7 @@ fn build_engine_with_interval(mode: ExecutionMode, interval: u64) -> Result<Copy
         )
     });
     let account = Arc::new(Mutex::new(account));
-    Ok(CopyEngine::new(account, interval, mode))
+    Ok(CopyEngine::new(account, interval))
 }
 
 fn print_log_file(limit: usize) {
