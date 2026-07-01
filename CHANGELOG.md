@@ -9,12 +9,29 @@ tags. The section matching a release tag is published as that release's notes
 
 ## [0.1.14] - 2026-06-30
 
+> Note: the `v0.1.13` release build failed and was never published, so this
+> release also carries the wallet, onboarding, and TUI work that landed after
+> the `v0.1.13` tag.
+
 ### Added
 - Windows builds. Release artifacts now include `x86_64-pc-windows-msvc`
   (`fiberglass-<tag>-x86_64-pc-windows-msvc.tar.gz`) alongside macOS and Linux,
   and CI runs the test suite on Windows as well. The self-updater (`upgrade`)
   remains macOS/Linux-only; update on Windows by downloading the release
   archive.
+- Private key is now stored in the OS keychain (macOS Keychain / Windows
+  Credential Manager / Linux Secret Service), with the plaintext config file
+  as a fallback.
+- Import-only onboarding: log into your own Polymarket account, with an
+  overwrite confirmation and key validation on import.
+- TUI live-mode dashboard stats, History fills, and a Debug panel.
+- Log-out button with a two-step, timed confirmation.
+
+### Changed
+- Active sidebar item now has a breathing fill and glowing edge bar.
+
+### Fixed
+- Accurate sort help text and a clearer empty-bridge status message.
 
 ## [0.1.13] - 2026-06-30
 
