@@ -37,7 +37,11 @@ fiberglass tui --paper    # paper mode, $10k fake money, no wallet
 ## config
 
 lives in `~/.config/polymarket/` your wallet, settings, paper account, guards,
-copytrade roster. private key is stored in plaintext , so make sure to store it in your machine accordingly.
+copytrade roster. your private key goes in the OS keychain (macOS Keychain,
+Windows Credential Manager, Linux Secret Service). on a headless box with no
+keychain it falls back to a plaintext file (`0600`, owner-only) — keep that
+machine locked down, or pass the key via `POLYMARKET_PRIVATE_KEY` / `--key`
+to keep it off disk entirely.
 
 see [changelog.md](CHANGELOG.md) for what changed.
 
