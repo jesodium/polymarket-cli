@@ -125,7 +125,7 @@ mod tests {
         let addr = "0x0000000000000000000000000000000000000001";
         assert_eq!(parse_address_or_me(addr).unwrap().to_string(), addr);
         assert!(parse_address_or_me("not-an-address").is_err());
-        // ponytail: `@`/`me` needs a configured wallet — covered manually, not here.
+        // IMPORTANT NOTE: `@`/`me` needs a configured wallet — covered manually, not here.
     }
 
     #[test]

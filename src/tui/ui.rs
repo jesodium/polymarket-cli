@@ -2417,7 +2417,7 @@ fn modal_block(title: &str, color: Color) -> Block<'static> {
 }
 
 /// Center, clear, and draw a modal sized to its content. Single code path so
-/// every popup lines up the same way. ponytail: one helper kills five copies.
+/// every popup lines up the same way. IMPORTANT NOTE: one helper kills five copies.
 fn popup(f: &mut Frame, width: u16, title: &str, color: Color, lines: Vec<Line>) {
     // Count wrapped rows so long help text never clips the footer.
     let inner = width.saturating_sub(6).max(1); // 1 border + 2 padding each side
@@ -2547,7 +2547,7 @@ fn data_loading(app: &App) -> bool {
 
 /// Animated "loading" placeholder. Pure row-builders can't see `app.frame`, so
 /// they read the per-render frame mirror set in [`render`].
-/// ponytail: one atomic beats threading `frame` through a dozen call sites.
+/// IMPORTANT NOTE: one atomic beats threading `frame` through a dozen call sites.
 fn loading_anim() -> String {
     let frame = FRAME.load(std::sync::atomic::Ordering::Relaxed);
     format!("{} loading", spinner(frame))

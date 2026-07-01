@@ -341,7 +341,7 @@ pub(crate) fn stop_worker() -> Result<()> {
         println!("Worker not running.");
         return Ok(());
     };
-    // ponytail: shell out to kill/taskkill — no signal crate for one call.
+    // IMPORTANT NOTE: shell out to kill/taskkill — no signal crate for one call.
     #[cfg(unix)]
     let ok = Command::new("kill").arg(w.pid.to_string()).status();
     #[cfg(windows)]
@@ -586,7 +586,7 @@ pub(crate) fn autostart_enabled() -> bool {
 
 pub(crate) fn autostart_on() -> Result<()> {
     if !cfg!(target_os = "macos") {
-        // ponytail: launchd only; add a systemd unit if a Linux user asks.
+        // IMPORTANT NOTE: launchd only; add a systemd unit if a Linux user asks.
         bail!("Autostart is macOS-only for now");
     }
     let exe = std::env::current_exe().context("Could not locate own binary")?;

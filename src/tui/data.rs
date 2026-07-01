@@ -233,7 +233,7 @@ pub(crate) async fn refresher(
                 if stale {
                     let equity = paper_engine::portfolio_view(&a, &marks).equity;
                     a.equity_curve.push((now, equity));
-                    // ponytail: ring-buffer cap ~10 days at 5-min cadence; raise if you want longer history.
+                    // IMPORTANT NOTE: ring-buffer cap ~10 days at 5-min cadence; raise if you want longer history.
                     const CAP: usize = 3000;
                     if a.equity_curve.len() > CAP {
                         let drop = a.equity_curve.len() - CAP;
@@ -542,7 +542,7 @@ pub(crate) async fn fetch_resolutions(
 async fn fetch_markets(client: &gamma::Client) -> anyhow::Result<Vec<MarketRow>> {
     // Order server-side by 24h volume desc so we get the most actively traded
     // markets, not Gamma's default (featured/recent) page.
-    // ponytail: client re-sort removed — it would undo the server order;
+    // IMPORTANT NOTE: client re-sort removed — it would undo the server order;
     // switch the order string if a different sort is wanted.
     let request = gamma::types::request::MarketsRequest::builder()
         .closed(false)
@@ -555,7 +555,7 @@ async fn fetch_markets(client: &gamma::Client) -> anyhow::Result<Vec<MarketRow>>
     // Cup Winner", one market per team) can't flood the list and crowd out other
     // categories. Markets sharing an event id past the cap are dropped; markets
     // with no event are keyed by their own id, so they're never capped.
-    // ponytail: fixed cap of 2 — make it a setting if users want to tune it.
+    // IMPORTANT NOTE: fixed cap of 2 — make it a setting if users want to tune it.
     const PER_EVENT_CAP: usize = 2;
     let mut per_event: HashMap<String, usize> = HashMap::new();
     let rows: Vec<MarketRow> = markets

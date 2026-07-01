@@ -58,7 +58,7 @@ pub(crate) fn load_required() -> Result<PaperAccount> {
 /// rather than lose those trades. Legitimate replacements that lower `next_id`
 /// (a `reset`) must call [`save_force`].
 ///
-/// ponytail: revision check, not a real lock — a tiny read-then-write TOCTOU
+/// IMPORTANT NOTE: revision check, not a real lock — a tiny read-then-write TOCTOU
 /// window remains. Fine for a local single-user paper file; add `flock` if
 /// concurrent paper writes ever get heavy.
 pub(crate) fn save(account: &PaperAccount) -> Result<()> {

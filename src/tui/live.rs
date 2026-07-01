@@ -113,7 +113,7 @@ pub(crate) async fn fetch_positions(user: Address) -> Result<Vec<Position>> {
 /// factor) work in live mode — `account.trades` is otherwise never hydrated.
 pub(crate) async fn fetch_closed_trades(user: Address) -> Result<Vec<Trade>> {
     let client = data::Client::default();
-    // ponytail: server caps this endpoint at 50 (rejects >50); add pagination if
+    // IMPORTANT NOTE: server caps this endpoint at 50 (rejects >50); add pagination if
     // a user ever closes more than 50 markets and needs the older ones.
     let request = ClosedPositionsRequest::builder()
         .user(user)

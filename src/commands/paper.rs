@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use clap::{Args, Subcommand};
 use polymarket_client_sdk_v2::types::Decimal;
@@ -106,7 +106,7 @@ pub enum PaperCommand {
         command: SnapshotCommand,
     },
 
-    /// Dump the trade log or positions as CSV to stdout (redirect to a file)
+    /// Write the trade log, positions, or per-market history to a CSV file on the Desktop
     Export {
         /// What to export
         #[arg(value_enum)]
@@ -128,6 +128,8 @@ pub enum SnapshotCommand {
 pub enum ExportKind {
     Trades,
     Positions,
+    /// Per-market summary: original size, final size, ROI, PnL.
+    History,
 }
 
 pub async fn execute(args: PaperArgs, output: OutputFormat) -> Result<()> {
@@ -391,47 +393,137 @@ pub async fn execute(args: PaperArgs, output: OutputFormat) -> Result<()> {
 
         PaperCommand::Export { what } => {
             let account = store::load_required()?;
-            match what {
-                ExportKind::Trades => {
+            let (name, csv) = match what {
+                ExportKind::Trades => ("trades", export_trades(&account)),
+                ExportKind::Positions => ("positions", export_positions(&account)),
+                ExportKind::History => ("history", export_history(&account)),
+            };
+            let path = write_export(name, &csv)?;
+            match output {
+                OutputFormat::Table => {
                     println!(
-                        "id,timestamp,token_id,question,outcome,side,kind,size,price,notional,realized_pnl"
+                        "Wrote {} rows to {}",
+                        csv.lines().count() - 1,
+                        path.display()
                     );
-                    for t in &account.trades {
-                        println!(
-                            "{},{},{},{},{},{},{},{},{},{},{}",
-                            t.id,
-                            t.timestamp.to_rfc3339(),
-                            t.token_id,
-                            csv_field(&t.question),
-                            csv_field(&t.outcome),
-                            t.side,
-                            t.kind,
-                            t.size,
-                            t.price,
-                            t.notional,
-                            t.realized_pnl.map(|p| p.to_string()).unwrap_or_default(),
-                        );
-                    }
                 }
-                ExportKind::Positions => {
-                    println!("token_id,question,outcome,size,avg_price,realized_pnl");
-                    for p in account.positions.values() {
-                        println!(
-                            "{},{},{},{},{},{}",
-                            p.token_id,
-                            csv_field(&p.question),
-                            csv_field(&p.outcome),
-                            p.size,
-                            p.avg_price,
-                            p.realized_pnl,
-                        );
-                    }
+                OutputFormat::Json => {
+                    crate::output::print_json(&serde_json::json!({
+                        "path": path.display().to_string(),
+                        "rows": csv.lines().count() - 1,
+                    }))?;
                 }
             }
         }
     }
 
     Ok(())
+}
+
+/// Save a CSV to `~/Desktop/paper-<name>-<timestamp>.csv` (falls back to the
+/// home dir if there's no Desktop) and return the path written.
+fn write_export(name: &str, csv: &str) -> Result<std::path::PathBuf> {
+    let dir = dirs::desktop_dir()
+        .or_else(dirs::home_dir)
+        .context("Could not determine Desktop or home directory")?;
+    let file = format!("paper-{}-{}.csv", name, Utc::now().format("%Y%m%d-%H%M%S"));
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let path = dir.join(file);
+    std::fs::write(&path, csv).with_context(|| format!("writing {}", path.display()))?;
+    Ok(path)
+}
+
+fn export_trades(account: &PaperAccount) -> String {
+    let mut out = String::from(
+        "id,timestamp,token_id,question,outcome,side,kind,size,price,notional,realized_pnl\n",
+    );
+    for t in &account.trades {
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{},{},{},{},{}\n",
+            t.id,
+            t.timestamp.to_rfc3339(),
+            t.token_id,
+            csv_field(&t.question),
+            csv_field(&t.outcome),
+            t.side,
+            t.kind,
+            t.size,
+            t.price,
+            t.notional,
+            t.realized_pnl.map(|p| p.to_string()).unwrap_or_default(),
+        ));
+    }
+    out
+}
+
+fn export_positions(account: &PaperAccount) -> String {
+    let mut out = String::from("token_id,question,outcome,size,avg_price,realized_pnl\n");
+    for p in account.positions.values() {
+        out.push_str(&format!(
+            "{},{},{},{},{},{}\n",
+            p.token_id,
+            csv_field(&p.question),
+            csv_field(&p.outcome),
+            p.size,
+            p.avg_price,
+            p.realized_pnl,
+        ));
+    }
+    out
+}
+
+/// Per-market history aggregated from the trade log (closed positions are
+/// dropped from `positions`, so trades are the only complete record).
+/// original_size = shares bought; final_size = shares still held;
+/// pnl = summed realized PnL; roi = pnl / cost basis.
+fn export_history(account: &PaperAccount) -> String {
+    // (token_id, question, outcome, bought, sold, cost_basis, pnl); Vec keeps
+    // first-seen order. IMPORTANT NOTE: O(n²) linear find, fine for a paper log.
+    let mut rows: Vec<(String, String, String, Decimal, Decimal, Decimal, Decimal)> = Vec::new();
+    for t in &account.trades {
+        let row = match rows.iter_mut().find(|r| r.0 == t.token_id) {
+            Some(r) => r,
+            None => {
+                rows.push((
+                    t.token_id.clone(),
+                    t.question.clone(),
+                    t.outcome.clone(),
+                    Decimal::ZERO,
+                    Decimal::ZERO,
+                    Decimal::ZERO,
+                    Decimal::ZERO,
+                ));
+                rows.last_mut().unwrap()
+            }
+        };
+        match t.side {
+            crate::paper::types::TradeSide::Buy => {
+                row.3 += t.size;
+                row.5 += t.notional;
+            }
+            crate::paper::types::TradeSide::Sell => row.4 += t.size,
+        }
+        row.6 += t.realized_pnl.unwrap_or(Decimal::ZERO);
+    }
+    let mut out = String::from("token_id,question,outcome,original_size,final_size,roi_pct,pnl\n");
+    for (token_id, question, outcome, bought, sold, basis, pnl) in rows {
+        let roi = if basis > Decimal::ZERO {
+            (pnl / basis * Decimal::from(100)).round_dp(2).to_string()
+        } else {
+            String::new()
+        };
+        out.push_str(&format!(
+            "{},{},{},{},{},{},{}\n",
+            token_id,
+            csv_field(&question),
+            csv_field(&outcome),
+            bought,
+            bought - sold,
+            roi,
+            pnl,
+        ));
+    }
+    out
 }
 
 /// Quote a CSV field only when it needs it (comma, quote, or newline). Questions

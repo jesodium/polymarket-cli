@@ -222,7 +222,7 @@ pub async fn execute(client: &data::Client, args: DataArgs, output: OutputFormat
         }
 
         DataCommand::Pnl { address } => {
-            // ponytail: fetch up to 500 positions; paginate if anyone holds more.
+            // IMPORTANT NOTE: fetch up to 500 positions; paginate if anyone holds more.
             let request = PositionsRequest::builder()
                 .user(address)
                 .limit(500)?

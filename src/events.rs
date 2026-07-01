@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 const FILE_NAME: &str = "events.jsonl";
-// ponytail: append-only, no rotation — guard fires are rare (each fire clears
+// IMPORTANT NOTE: append-only, no rotation — guard fires are rare (each fire clears
 // its guard). Add rotation if some future emitter gets chatty.
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
