@@ -4,7 +4,6 @@ a rewritten fork of the polymarket cli built for AI agent support and backtestin
 
 ![macos](https://img.shields.io/badge/macos-000000?logo=apple&logoColor=white)
 ![linux](https://img.shields.io/badge/linux-FCC624?logo=linux&logoColor=black)
-![mit](https://img.shields.io/badge/license-mit-green)
 
 ## Use your own money at your own risk!
 The live mode has not been tested yet; if you lose your money, it's your problem.
