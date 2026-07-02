@@ -10,6 +10,8 @@ version numbers keep their original case).
 
 ## [unreleased]
 
+## [0.1.17] - 2026-07-01
+
 ### changed
 - removed the user-facing `guard` command and replaced it with a simpler risk
   command flow:
