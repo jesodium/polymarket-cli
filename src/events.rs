@@ -2,8 +2,8 @@
 //!
 //! Every event is appended to `~/.config/polymarket/events.jsonl` and
 //! (optionally) surfaced as an OS notification. The JSONL file is the bridge
-//! to agentic clients: the `guard_events` MCP tool and `risk events` command
-//! read it, so an AI agent can poll and relay to whatever channel it likes.
+//! to agentic clients: the `risk events` command reads it, so an AI agent can
+//! poll and relay to whatever channel it likes.
 //!
 //! Best-effort throughout: a notification failure must never break trading.
 

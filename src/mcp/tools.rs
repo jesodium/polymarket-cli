@@ -344,21 +344,6 @@ pub(super) fn definitions() -> Vec<Value> {
             "Paper performance analytics: win rate, best/worst trade, daily PnL.",
             obj(json!({}), &[]),
         ),
-        // ── Guard worker (background TP/SL) ──────────────────────────────
-        tool(
-            "guard_status",
-            "Status of the background TP/SL guard worker: liveness, armed guard count, autostart.",
-            obj(json!({}), &[]),
-        ),
-        tool(
-            "guard_events",
-            "Recent notification events (guard exits, failed exits). Poll this to relay \
-             fills/alerts to external channels (chat apps, dashboards).",
-            obj(
-                json!({"limit": int_prop("Max events to return, most recent (default 20)")}),
-                &[],
-            ),
-        ),
         // ── Misc ─────────────────────────────────────────────────────────
         tool(
             "status",
@@ -555,12 +540,6 @@ pub(super) fn build_argv(name: &str, args: &Value) -> Result<Vec<String>> {
         "paper_stats" => svec(&["paper", "stats"]),
 
         // ── Misc ─────────────────────────────────────────────────────────
-        "guard_status" => svec(&["risk", "status"]),
-        "guard_events" => {
-            let mut a = svec(&["risk", "events"]);
-            push_opt(&mut a, args, "limit", "--limit");
-            a
-        }
         "status" => svec(&["status"]),
         "run_cli" => return run_cli_argv(args),
 

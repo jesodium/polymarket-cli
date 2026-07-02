@@ -20,6 +20,11 @@ version numbers keep their original case).
 - runtime control is now explicit at the top level: `start` runs the full
   background daemon (mcp + tp/sl/trail + copy trading), and `stop` halts it.
 
+### removed
+- mcp tools `guard_status` and `guard_events`. the underlying `risk
+  status`/`risk events` commands still exist and remain reachable via the
+  `run_cli` escape hatch.
+
 ## [0.1.16] - 2026-07-01
 
 ### added
