@@ -129,8 +129,25 @@ enum Commands {
     },
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
+    // Windows gives the process thread a 1MB stack by default, too small for
+    // this CLI's deep clap derive tree in debug builds (fine on unix's 8MB).
+    // Run on a thread with an explicit larger stack instead.
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build tokio runtime")
+                .block_on(run_main())
+        })
+        .expect("failed to spawn main thread")
+        .join()
+        .expect("main thread panicked")
+}
+
+async fn run_main() -> ExitCode {
     let cli = Cli::parse();
     let output = cli.output;
     let is_tui = matches!(
