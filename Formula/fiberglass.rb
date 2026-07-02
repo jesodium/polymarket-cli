@@ -1,30 +1,30 @@
 class Fiberglass < Formula
   desc "Fiberglass — a trading terminal for Polymarket"
   homepage "https://github.com/jesodium/fiberglass"
-  version "0.1.16"
+  version "0.1.17"
   license "MIT"
 
   on_macos do
     on_intel do
       url "https://github.com/jesodium/fiberglass/releases/download/v#{version}/fiberglass-v#{version}-x86_64-apple-darwin.tar.gz"
-      sha256 "87b9ea41ef6718c42c1eac1493c241215ef914f6ddab7c16623bb1b4dc04fe04"
+      sha256 "283941a4bedfa18d2e3e8de2de09c4b35c59f80fa28900cc5f326aea448e10b9"
     end
 
     on_arm do
       url "https://github.com/jesodium/fiberglass/releases/download/v#{version}/fiberglass-v#{version}-aarch64-apple-darwin.tar.gz"
-      sha256 "68d4bc5b1038afe27149b4fd54331aa80c63c7fd800dbfa81466cf1c3319a035"
+      sha256 "b52688d8a8d178603870912322bd62059e918df4c9d8292946ace9c0d83cbeee"
     end
   end
 
   on_linux do
     on_intel do
       url "https://github.com/jesodium/fiberglass/releases/download/v#{version}/fiberglass-v#{version}-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "5f203ee4b5fff27febb05523ea59fcaa5d33b4f9814f32ad43b1352836fdd19f"
+      sha256 "c58eba077d31be642adc94edc2b22be628f50ac84a7e1d0116515ed785e33d81"
     end
 
     on_arm do
       url "https://github.com/jesodium/fiberglass/releases/download/v#{version}/fiberglass-v#{version}-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "b7fcc1df1dcaf5c28b1554ebcc70dc786b1c51085f6d32baad7a356b32df149e"
+      sha256 "7b8ac252f147a1f88c40593207c239fe403eb056f15608018183bb9b5e4e33c6"
     end
   end
 
