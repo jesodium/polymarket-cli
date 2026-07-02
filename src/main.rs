@@ -60,8 +60,14 @@ enum Commands {
     Mcp,
     /// Copy-trading: follow wallets and mirror their trades
     Copytrade(commands::copytrade::CopyTradeArgs),
-    /// TP/SL exit guards and the background worker that runs them
-    Guard(commands::guard::GuardArgs),
+    /// Add/remove take-profit rules on a token
+    Tp(commands::risk::TpArgs),
+    /// Add/remove stop-loss rules on a token
+    Sl(commands::risk::SlArgs),
+    /// Add/remove trailing-stop rules on a token
+    Trail(commands::risk::TrailArgs),
+    /// List/manage risk rules and risk worker state
+    Risk(commands::risk::RiskArgs),
     /// View and edit trading settings (mode, presets, slippage, TP/SL)
     Settings(commands::settings::SettingsArgs),
     /// Interact with markets
@@ -82,6 +88,8 @@ enum Commands {
     Approve(commands::approve::ApproveArgs),
     /// Interact with the CLOB (order book, trading, balances)
     Clob(commands::clob::ClobArgs),
+    /// View your portfolio overview (equity, positions, PnL)
+    Portfolio(commands::portfolio::PortfolioArgs),
     /// Paper trading: simulate orders with a virtual balance
     Paper(commands::paper::PaperArgs),
     /// CTF operations: split, merge, redeem positions
@@ -98,11 +106,18 @@ enum Commands {
     ///
     /// Detaches and keeps running after you close the terminal, exactly like
     /// the TUI's background workers but with no screen. `stop` to halt,
-    /// `guard status` to check on it.
+    /// `risk status` to check on it.
     Start,
     /// Stop all background activity (guards + copy-trading)
     #[command(visible_aliases = ["die", "end"])]
     Stop,
+    /// Internal worker entrypoint for detached background runtime
+    #[command(hide = true)]
+    Worker {
+        /// Seconds between evaluation passes
+        #[arg(long, default_value_t = commands::guard::DEFAULT_INTERVAL_SECS)]
+        interval: u64,
+    },
     /// Update to the latest version
     Upgrade,
     /// Generate a shell completion script (bash, zsh, fish, powershell, elvish)
@@ -157,9 +172,13 @@ pub(crate) async fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Shell => Box::pin(shell::run_shell()).await,
         Commands::Mcp => mcp::run(),
         Commands::Copytrade(args) => commands::copytrade::execute(args, cli.output).await,
-        Commands::Guard(args) => commands::guard::execute(args, cli.output).await,
+        Commands::Tp(args) => commands::risk::execute_tp(args, cli.output).await,
+        Commands::Sl(args) => commands::risk::execute_sl(args, cli.output).await,
+        Commands::Trail(args) => commands::risk::execute_trail(args, cli.output).await,
+        Commands::Risk(args) => commands::risk::execute_risk(args, cli.output).await,
         Commands::Start => commands::guard::start_daemon(),
         Commands::Stop => commands::guard::stop_worker(),
+        Commands::Worker { interval } => commands::guard::run_worker(interval.max(1)).await,
         Commands::Settings(args) => commands::settings::execute(args, cli.output),
         Commands::Markets(args) => commands::markets::execute(&gamma, args, cli.output).await,
         Commands::Events(args) => commands::events::execute(&gamma, args, cli.output).await,
@@ -195,6 +214,7 @@ pub(crate) async fn run(cli: Cli) -> anyhow::Result<()> {
             )
             .await
         }
+        Commands::Portfolio(args) => commands::portfolio::execute(args, cli.output).await,
         Commands::Paper(args) => commands::paper::execute(args, cli.output).await,
         Commands::Data(args) => commands::data::execute(&data, args, cli.output).await,
         Commands::Bridge(args) => commands::bridge::execute(&bridge, args, cli.output).await,

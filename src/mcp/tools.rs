@@ -555,9 +555,9 @@ pub(super) fn build_argv(name: &str, args: &Value) -> Result<Vec<String>> {
         "paper_stats" => svec(&["paper", "stats"]),
 
         // ── Misc ─────────────────────────────────────────────────────────
-        "guard_status" => svec(&["guard", "status"]),
+        "guard_status" => svec(&["risk", "status"]),
         "guard_events" => {
-            let mut a = svec(&["guard", "events"]);
+            let mut a = svec(&["risk", "events"]);
             push_opt(&mut a, args, "limit", "--limit");
             a
         }

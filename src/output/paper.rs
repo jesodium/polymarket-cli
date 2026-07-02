@@ -6,14 +6,14 @@ use tabled::{Table, Tabled};
 use crate::output::{DASH, OutputFormat, print_detail_table, print_json, truncate};
 use crate::paper::types::{OpenOrder, PaperAccount, PortfolioView, Stats, Trade};
 
-fn money(d: Decimal) -> String {
+pub(crate) fn money(d: Decimal) -> String {
     format!(
         "${:.2}",
         d.round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
     )
 }
 
-fn signed_money(d: Decimal) -> String {
+pub(crate) fn signed_money(d: Decimal) -> String {
     if d < Decimal::ZERO {
         format!("-{}", money(-d))
     } else {

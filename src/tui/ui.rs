@@ -1738,10 +1738,43 @@ fn render_trading_settings(f: &mut Frame, app: &App, area: Rect) {
         .block(panel("Trading Settings — Enter to edit / cycle"))
         .row_highlight_style(highlight())
         .highlight_symbol("▶ ");
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(12), Constraint::Length(8)])
+        .split(area);
     f.render_stateful_widget(
         table,
-        area,
+        sections[0],
         &mut sel_state(app.settings_sel, SETTING_ROWS.len()),
+    );
+    let mut key_lines = vec![
+        Line::from(Span::styled(
+            "Advanced keybinds (Settings):",
+            Style::default().fg(DIM),
+        )),
+        Line::from(Span::styled(
+            "x — Set proxy/funder address (LIVE)",
+            Style::default().fg(DIM),
+        )),
+        Line::from(Span::styled(
+            "y — Cycle signature type (LIVE)",
+            Style::default().fg(DIM),
+        )),
+    ];
+    let destructive = if app.live {
+        "SHIFT+L — Log out wallet / remove local key [DESTRUCTIVE]"
+    } else {
+        "SHIFT+L — Reset paper account (same as r) [DESTRUCTIVE]"
+    };
+    key_lines.push(Line::from(Span::styled(
+        destructive,
+        Style::default().fg(BAD).bold(),
+    )));
+    f.render_widget(
+        Paragraph::new(key_lines)
+            .block(panel("Keybinds"))
+            .wrap(Wrap { trim: true }),
+        sections[1],
     );
 }
 

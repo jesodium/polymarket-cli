@@ -775,12 +775,18 @@ impl App {
                     self.status = "Import a wallet first (m).".into();
                 }
             }
-            // Settings: log out (remove the key from this machine).
-            KeyCode::Char('L') if self.view == View::Settings && self.live => {
-                if self.wallet.is_some() {
-                    self.logout_modal = Some(LogoutModal { armed_at: None });
+            // Settings: Shift+L => live logout, paper reset shortcut.
+            KeyCode::Char('L') if self.view == View::Settings => {
+                if self.live {
+                    if self.wallet.is_some() {
+                        self.logout_modal = Some(LogoutModal { armed_at: None });
+                    } else {
+                        self.status = "No wallet to log out of.".into();
+                    }
                 } else {
-                    self.status = "No wallet to log out of.".into();
+                    self.open_reset_modal();
+                    self.status =
+                        "Paper reset armed. Enter a new starting balance and press Enter.".into();
                 }
             }
             // Settings: cycle the signature type (eoa → proxy → gnosis-safe).
@@ -797,16 +803,7 @@ impl App {
                     self.status =
                         "Reset only applies to the paper account. Relaunch with `--paper`.".into();
                 } else {
-                    let current = self.account.lock().unwrap().initial_balance;
-                    let prefill = if current > Decimal::ZERO {
-                        current.round_dp(0).to_string()
-                    } else {
-                        default_starting_balance().round_dp(0).to_string()
-                    };
-                    self.reset_modal = Some(ResetModal {
-                        balance: prefill,
-                        error: None,
-                    });
+                    self.open_reset_modal();
                 }
             }
             KeyCode::Char('U') if self.update_available.is_some() => {
@@ -1077,6 +1074,19 @@ impl App {
 
     fn persist_settings(&self) {
         let _ = settings::save(&self.settings);
+    }
+
+    fn open_reset_modal(&mut self) {
+        let current = self.account.lock().unwrap().initial_balance;
+        let prefill = if current > Decimal::ZERO {
+            current.round_dp(0).to_string()
+        } else {
+            default_starting_balance().round_dp(0).to_string()
+        };
+        self.reset_modal = Some(ResetModal {
+            balance: prefill,
+            error: None,
+        });
     }
 
     // --- Order modal -------------------------------------------------------

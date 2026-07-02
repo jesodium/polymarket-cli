@@ -10,11 +10,21 @@ version numbers keep their original case).
 
 ## [unreleased]
 
+### changed
+- removed the user-facing `guard` command and replaced it with a simpler risk
+  command flow:
+  - set/remove take profit: `tp add/remove <token_id> --pct <n> [--live]`
+  - set/remove stop loss: `sl add/remove <token_id> --pct <n> [--live]`
+  - set/remove trailing stop: `trail add/remove <token_id> --pct <n> [--live]`
+  - list/manage risk state: `risk list|remove|status|events|autostart`
+- runtime control is now explicit at the top level: `start` runs the full
+  background daemon (mcp + tp/sl/trail + copy trading), and `stop` halts it.
+
 ## [0.1.16] - 2026-07-01
 
 ### added
 - `guard` command — the TP/SL exit worker is now a first-class cli surface, not
-  just a tui background task. arm a guard on a token you hold (`guard set
+  just a tui background task. arm a guard on a token you hold (`guard arm
   <token> --tp <pct> --sl <pct> --trail <pct>`, `--live` for the wallet
   position instead of paper), `guard clear`/`guard list` to manage them, and
   `guard run`/`guard start`/`guard stop` to control the evaluation worker

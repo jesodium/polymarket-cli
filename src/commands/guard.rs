@@ -1,6 +1,6 @@
-//! `guard` — arm TP/SL exit guards, plus the headless background worker.
+//! Background risk worker lifecycle and status helpers.
 //!
-//! The worker (`guard run`) is the TUI's two background jobs with no screen: it
+//! The worker (`fiberglass worker`) is the TUI's two background jobs with no screen: it
 //! evaluates TP/SL guards *and* polls copy-trading, and it now brings up the
 //! background MCP listener too. `fiberglass start` (and the TUI on launch / an
 //! order placement) spawns it detached so those keep running after you close
@@ -21,7 +21,6 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
-use clap::{Args, Subcommand};
 use polymarket_client_sdk_v2::types::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -38,192 +37,76 @@ use crate::{auth, config};
 const WORKER_FILE: &str = "guard-worker.json";
 const TUI_FILE: &str = "tui-heartbeat.json";
 const LOG_FILE: &str = "guard-worker.log";
-const DEFAULT_INTERVAL_SECS: u64 = 5;
+pub(crate) const DEFAULT_INTERVAL_SECS: u64 = 5;
 /// A heartbeat older than this many intervals counts as dead.
 const STALE_TICKS: i64 = 4;
 
-#[derive(Args)]
-pub struct GuardArgs {
-    #[command(subcommand)]
-    pub command: GuardCommand,
-}
-
-#[derive(Subcommand)]
-pub enum GuardCommand {
-    /// Arm (or replace) a TP/SL guard on a token you hold
-    Arm {
-        /// CLOB token ID of the position to watch
-        token_id: String,
-        /// Sell once unrealized gain reaches this percent
-        #[arg(long)]
-        tp: Option<Decimal>,
-        /// Sell once unrealized loss reaches this percent
-        #[arg(long)]
-        sl: Option<Decimal>,
-        /// Sell once the mark falls this percent below its peak
-        #[arg(long)]
-        trail: Option<Decimal>,
-        /// Guard the live wallet position (default: paper account)
-        #[arg(long)]
-        live: bool,
-    },
-    /// Disarm the guard on a token
-    Clear { token_id: String },
-    /// List armed guards
-    List,
-    /// Run the guard + copy-trade worker in the foreground (Ctrl-C to stop)
-    Run {
-        /// Seconds between evaluation passes
-        #[arg(long, default_value_t = DEFAULT_INTERVAL_SECS)]
-        interval: u64,
-    },
-    /// Start the worker detached in the background
-    Start,
-    /// Stop the background worker
-    Stop,
-    /// Show worker liveness and armed guards
-    Status,
-    /// Show recent notification events (guard exits, failures)
-    Events {
-        /// Max events to show (most recent)
-        #[arg(long, default_value = "20")]
-        limit: usize,
-    },
-    /// Start the worker automatically at login (macOS): on | off | show
-    Autostart { state: String },
-}
-
-pub async fn execute(args: GuardArgs, output: OutputFormat) -> Result<()> {
-    match args.command {
-        GuardCommand::Arm {
-            token_id,
-            tp,
-            sl,
-            trail,
-            live,
-        } => {
-            if tp.is_none() && sl.is_none() && trail.is_none() {
-                bail!("Set at least one of --tp, --sl, --trail");
-            }
-            // Positions are keyed by the decimal token ID; accept hex too.
-            let token_id = quotes::parse_token_id(&token_id)?.to_string();
-            guard::arm(&token_id, live, tp, sl, trail)?;
-            let mode = if live { "live" } else { "paper" };
-            println!("Guard armed on {token_id} ({mode}).");
-            ensure_worker(false);
-            Ok(())
-        }
-        GuardCommand::Clear { token_id } => {
-            let token_id = quotes::parse_token_id(&token_id)?.to_string();
-            guard::clear(&token_id)?;
-            println!("Guard cleared on {token_id}.");
-            Ok(())
-        }
-        GuardCommand::List => {
-            let book = guard::load().unwrap_or_default();
-            if let OutputFormat::Json = output {
-                println!("{}", serde_json::to_string_pretty(&book)?);
-                return Ok(());
-            }
-            if book.guards.is_empty() {
-                println!("No guards armed.");
-            }
-            for g in &book.guards {
-                let mode = if g.live { "live " } else { "paper" };
-                println!("{mode}  {}  {}", g.token_id, g.describe());
-            }
-            Ok(())
-        }
-        GuardCommand::Run { interval } => run_worker(interval.max(1)).await,
-        GuardCommand::Start => start_daemon(),
-        GuardCommand::Stop => stop_worker(),
-        GuardCommand::Status => {
-            let worker = load_worker();
-            let alive = worker.as_ref().is_some_and(WorkerStatus::is_recent);
-            let mcp = crate::mcp::status::load();
-            let book = guard::load().unwrap_or_default();
-            if let OutputFormat::Json = output {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "alive": alive,
-                        "worker": worker,
-                        "mcp": mcp,
-                        "guards": book.guards.len(),
-                        "autostart": autostart_enabled(),
-                    })
-                );
-                return Ok(());
-            }
-            match worker {
-                Some(w) if alive => println!(
-                    "Worker RUNNING (pid {}, {} guard(s), last tick {})",
-                    w.pid,
-                    w.guards,
-                    w.last_tick.map_or_else(|| "—".into(), |t| t.to_rfc3339())
-                ),
-                Some(_) => println!("Worker not running (stale heartbeat)."),
-                None => println!("Worker not running."),
-            }
-            println!(
-                "{} guard(s) armed. Autostart at login: {}.",
-                book.guards.len(),
-                if autostart_enabled() { "on" } else { "off" }
-            );
-            match mcp {
-                Some(s) if s.state == "listening" => {
-                    println!("MCP listening on {}.", s.endpoint.unwrap_or_default());
-                }
-                Some(s) if s.is_recent() => {
-                    println!("MCP session active ({}, {}).", s.transport, s.state);
-                }
-                Some(_) => println!("MCP not active."),
-                None => println!("MCP not running."),
-            }
-            println!("Log: {}", config::config_dir()?.join(LOG_FILE).display());
-            Ok(())
-        }
-        GuardCommand::Events { limit } => {
-            let events = crate::events::recent(limit);
-            if let OutputFormat::Json = output {
-                println!("{}", serde_json::to_string_pretty(&events)?);
-                return Ok(());
-            }
-            if events.is_empty() {
-                println!("No events yet.");
-            }
-            for e in &events {
-                println!(
-                    "[{}] {} ({}) {}",
-                    e.ts.format("%Y-%m-%d %H:%M:%S"),
-                    e.kind,
-                    e.mode,
-                    e.message
-                );
-            }
-            Ok(())
-        }
-        GuardCommand::Autostart { state } => match state.as_str() {
-            "on" => {
-                autostart_on()?;
-                println!("Guard worker will start at login.");
-                Ok(())
-            }
-            "off" => {
-                autostart_off()?;
-                println!("Autostart disabled.");
-                Ok(())
-            }
-            "show" | "status" => {
-                println!(
-                    "Autostart at login: {}",
-                    if autostart_enabled() { "on" } else { "off" }
-                );
-                Ok(())
-            }
-            other => bail!("Expected on | off | show, got '{other}'"),
-        },
+pub(crate) fn print_status(output: OutputFormat) -> Result<()> {
+    let worker = load_worker();
+    let alive = worker.as_ref().is_some_and(WorkerStatus::is_recent);
+    let mcp = crate::mcp::status::load();
+    let book = guard::load().unwrap_or_default();
+    if let OutputFormat::Json = output {
+        println!(
+            "{}",
+            serde_json::json!({
+                "alive": alive,
+                "worker": worker,
+                "mcp": mcp,
+                "guards": book.guards.len(),
+                "autostart": autostart_enabled(),
+            })
+        );
+        return Ok(());
     }
+    match worker {
+        Some(w) if alive => println!(
+            "Worker RUNNING (pid {}, {} guard(s), last tick {})",
+            w.pid,
+            w.guards,
+            w.last_tick.map_or_else(|| "—".into(), |t| t.to_rfc3339())
+        ),
+        Some(_) => println!("Worker not running (stale heartbeat)."),
+        None => println!("Worker not running."),
+    }
+    println!(
+        "{} guard(s) armed. Autostart at login: {}.",
+        book.guards.len(),
+        if autostart_enabled() { "on" } else { "off" }
+    );
+    match mcp {
+        Some(s) if s.state == "listening" => {
+            println!("MCP listening on {}.", s.endpoint.unwrap_or_default());
+        }
+        Some(s) if s.is_recent() => {
+            println!("MCP session active ({}, {}).", s.transport, s.state);
+        }
+        Some(_) => println!("MCP not active."),
+        None => println!("MCP not running."),
+    }
+    println!("Log: {}", config::config_dir()?.join(LOG_FILE).display());
+    Ok(())
+}
+
+pub(crate) fn print_events(limit: usize, output: OutputFormat) -> Result<()> {
+    let events = crate::events::recent(limit);
+    if let OutputFormat::Json = output {
+        println!("{}", serde_json::to_string_pretty(&events)?);
+        return Ok(());
+    }
+    if events.is_empty() {
+        println!("No events yet.");
+    }
+    for e in &events {
+        println!(
+            "[{}] {} ({}) {}",
+            e.ts.format("%Y-%m-%d %H:%M:%S"),
+            e.kind,
+            e.mode,
+            e.message
+        );
+    }
+    Ok(())
 }
 
 // --- heartbeat files --------------------------------------------------------
@@ -312,7 +195,7 @@ pub(crate) fn ensure_worker(quiet: bool) {
     }
     match spawn_worker() {
         Ok(()) if !quiet => {
-            eprintln!("Background worker started (`fiberglass guard status`).");
+            eprintln!("Background worker started (`fiberglass risk status`).");
         }
         Ok(()) => {}
         Err(e) => eprintln!("Could not start background worker: {e:#}"),
@@ -333,7 +216,7 @@ pub fn start_daemon() -> Result<()> {
     spawn_worker()?;
     println!(
         "Started headless: TP/SL guards + copy-trading + MCP (each item runs in its own \
-         paper/live mode). Survives closing this terminal.\n`guard status` to check, `stop` to halt."
+         paper/live mode). Survives closing this terminal.\n`risk status` to check, `stop` to halt."
     );
     Ok(())
 }
@@ -347,7 +230,7 @@ fn spawn_worker() -> Result<()> {
         .append(true)
         .open(dir.join(LOG_FILE))?;
     let mut cmd = Command::new(exe);
-    cmd.arg("guard").arg("run");
+    cmd.arg("worker");
     cmd.stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
@@ -395,7 +278,7 @@ pub(crate) fn stop_worker() -> Result<()> {
     }
     if autostart_enabled() {
         println!(
-            "Autostart is on: the worker returns at next login (`guard autostart off` to disable)."
+            "Autostart is on: the worker returns at next login (`risk autostart off` to disable)."
         );
     }
     Ok(())
@@ -403,7 +286,7 @@ pub(crate) fn stop_worker() -> Result<()> {
 
 // --- the worker loop --------------------------------------------------------
 
-async fn run_worker(interval: u64) -> Result<()> {
+pub(crate) async fn run_worker(interval: u64) -> Result<()> {
     if let Some(w) = worker_alive()
         && w.pid != std::process::id()
     {

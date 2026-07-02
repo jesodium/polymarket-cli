@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -37,6 +38,7 @@ fn default_signature_type() -> String {
     DEFAULT_SIGNATURE_TYPE.to_string()
 }
 
+#[derive(Clone, Copy)]
 pub(crate) enum KeySource {
     Flag,
     EnvVar,
@@ -91,6 +93,30 @@ fn keychain_delete() {
     }
 }
 
+#[derive(Clone)]
+struct CachedResolvedKey {
+    key: Option<String>,
+    source: KeySource,
+}
+
+static RESOLVED_KEY_CACHE: OnceLock<Mutex<Option<CachedResolvedKey>>> = OnceLock::new();
+
+fn resolved_key_cache() -> &'static Mutex<Option<CachedResolvedKey>> {
+    RESOLVED_KEY_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn cache_resolved_key(key: Option<String>, source: KeySource) {
+    if let Ok(mut slot) = resolved_key_cache().lock() {
+        *slot = Some(CachedResolvedKey { key, source });
+    }
+}
+
+fn clear_resolved_key_cache() {
+    if let Ok(mut slot) = resolved_key_cache().lock() {
+        *slot = None;
+    }
+}
+
 pub(crate) fn config_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Could not determine home directory")?;
     Ok(home.join(".config").join("polymarket"))
@@ -108,6 +134,7 @@ pub fn config_exists() -> bool {
 /// (e.g. the paper trading account) are left untouched.
 pub fn delete_config() -> Result<()> {
     keychain_delete();
+    clear_resolved_key_cache();
     let path = config_path()?;
     if path.exists() {
         fs::remove_file(&path).context("Failed to remove config file")?;
@@ -159,11 +186,13 @@ pub fn save_wallet(key: &str, chain_id: u64, signature_type: &str) -> Result<Key
         signature_type: signature_type.to_string(),
         proxy_address: None,
     })?;
-    Ok(if in_keychain {
-        KeyStorage::Keychain
+    let (storage, source) = if in_keychain {
+        (KeyStorage::Keychain, KeySource::Keychain)
     } else {
-        KeyStorage::PlaintextFile
-    })
+        (KeyStorage::PlaintextFile, KeySource::ConfigFile)
+    };
+    cache_resolved_key(Some(key.to_string()), source);
+    Ok(storage)
 }
 
 /// Migrate a plaintext key from the config file into the OS keychain and scrub
@@ -179,6 +208,7 @@ pub fn secure_existing_key() -> Result<KeyStorage> {
         config.private_key = None;
         write_config(&config)?;
     }
+    cache_resolved_key(Some(key), KeySource::Keychain);
     Ok(KeyStorage::Keychain)
 }
 
@@ -256,12 +286,32 @@ pub fn resolve_key(cli_flag: Option<&str>) -> Result<(Option<String>, KeySource)
     {
         return Ok((Some(key), KeySource::EnvVar));
     }
+    // Single-flight cache fill: serialize misses so concurrent callers don't
+    // trigger multiple keychain prompts before the cache is populated.
+    let mut slot = resolved_key_cache()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Failed to lock key cache"))?;
+    if let Some(cached) = &*slot {
+        return Ok((cached.key.clone(), cached.source));
+    }
     if let Some(key) = keychain_get() {
+        *slot = Some(CachedResolvedKey {
+            key: Some(key.clone()),
+            source: KeySource::Keychain,
+        });
         return Ok((Some(key), KeySource::Keychain));
     }
     if let Some(key) = load_config()?.and_then(|c| c.private_key) {
+        *slot = Some(CachedResolvedKey {
+            key: Some(key.clone()),
+            source: KeySource::ConfigFile,
+        });
         return Ok((Some(key), KeySource::ConfigFile));
     }
+    *slot = Some(CachedResolvedKey {
+        key: None,
+        source: KeySource::None,
+    });
     Ok((None, KeySource::None))
 }
 
